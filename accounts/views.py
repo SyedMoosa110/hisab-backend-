@@ -8,7 +8,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.db.models import Case, Count, DecimalField, F, Q, Sum, Value, When
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, TruncMonth
 from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from openpyxl import Workbook
@@ -233,7 +233,7 @@ def reports_view(request):
         .order_by("category__name")
     )
     by_month = (
-        qs.extra(select={"month": "strftime('%%Y-%%m', date)"})
+        qs.annotate(month=TruncMonth("date"))
         .values("month", "transaction_type")
         .annotate(total=Sum("amount"))
         .order_by("month")
@@ -293,7 +293,7 @@ def export_pdf_view(request):
     pdf.drawString(40, y, "Account Statement")
     y -= 30
     pdf.setFont("Helvetica", 9)
-    for tx in filtered_transactions(request)[:45]:
+    for tx in filtered_transactions(request):
         line = f"{tx.date} | {tx.transaction_type.upper()} | {tx.title} | {tx.category.name} | Rs {tx.amount}"
         pdf.drawString(40, y, line[:115])
         y -= 18
