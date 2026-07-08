@@ -248,17 +248,6 @@ def dashboard_view(request):
 @api_view(["GET"])
 def reports_view(request):
     qs = filtered_transactions(request)
-    by_category = (
-        qs.values("category__name", "transaction_type")
-        .annotate(total=Sum("amount"))
-        .order_by("category__name")
-    )
-    by_month = (
-        qs.annotate(month=TruncMonth("date"))
-        .values("month", "transaction_type")
-        .annotate(total=Sum("amount"))
-        .order_by("month")
-    )
     by_date = (
         qs.annotate(grouped_date=TruncDate("date"))
         .values("grouped_date", "transaction_type")
@@ -274,10 +263,7 @@ def reports_view(request):
     return Response(
         {
             "summary": {"income": income, "expense": expense, "balance": income - expense},
-            "by_category": list(by_category),
-            "by_month": list(by_month),
             "by_date": [{"date": row["grouped_date"], "transaction_type": row["transaction_type"], "total": row["total"]} for row in by_date],
-            "transactions": TransactionSerializer(qs[:200], many=True).data,
         }
     )
 

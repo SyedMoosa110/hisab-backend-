@@ -87,6 +87,8 @@ DATABASES = {
         'PASSWORD': 'npg_NrV2tcwzedI9',
         'HOST': 'ep-misty-morning-ati3mni6-pooler.c-9.us-east-1.aws.neon.tech',
         'PORT': '5432',
+        'CONN_MAX_AGE': 600,
+        'CONN_HEALTH_CHECKS': True,
         'OPTIONS': {
             'sslmode': 'require',
             'channel_binding': 'require',
