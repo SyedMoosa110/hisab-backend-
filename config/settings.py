@@ -89,6 +89,7 @@ DATABASES = {
         'PORT': '5432',
         'OPTIONS': {
             'sslmode': 'require',
+            'channel_binding': 'require',
         },
     }
 }

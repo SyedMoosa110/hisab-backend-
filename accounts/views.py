@@ -8,7 +8,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.db.models import Case, Count, DecimalField, F, Q, Sum, Value, When
-from django.db.models.functions import Coalesce, TruncMonth
+from django.db.models.functions import Coalesce, TruncDate, TruncMonth
 from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from openpyxl import Workbook
@@ -106,6 +106,10 @@ class TransactionViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return filtered_transactions(self.request)
 
+    def list(self, request, *args, **kwargs):
+        serializer = self.get_serializer(self.get_queryset()[:200], many=True)
+        return Response(serializer.data)
+
 
 class DuePaymentViewSet(viewsets.ModelViewSet):
     serializer_class = DuePaymentSerializer
@@ -168,9 +172,12 @@ def change_password_view(request):
 
 
 def period_summary(start, end):
-    qs = Transaction.objects.filter(date__gte=start, date__lte=end)
-    income = money(qs.filter(transaction_type="income").aggregate(total=Sum("amount"))["total"])
-    expense = money(qs.filter(transaction_type="expense").aggregate(total=Sum("amount"))["total"])
+    totals = Transaction.objects.filter(date__gte=start, date__lte=end).aggregate(
+        income=Sum("amount", filter=Q(transaction_type="income")),
+        expense=Sum("amount", filter=Q(transaction_type="expense")),
+    )
+    income = money(totals["income"])
+    expense = money(totals["expense"])
     return {"income": income, "expense": expense, "balance": income - expense}
 
 
@@ -180,25 +187,39 @@ def dashboard_view(request):
     week_start = today - timedelta(days=today.weekday())
     month_start = today.replace(day=1)
     year_start = today.replace(month=1, day=1)
+    
     tx = Transaction.objects.all()
-    income = money(tx.filter(transaction_type="income").aggregate(total=Sum("amount"))["total"])
-    expense = money(tx.filter(transaction_type="expense").aggregate(total=Sum("amount"))["total"])
+    totals = tx.aggregate(
+        income=Sum("amount", filter=Q(transaction_type="income")),
+        expense=Sum("amount", filter=Q(transaction_type="expense")),
+    )
+    income = money(totals["income"])
+    expense = money(totals["expense"])
     opening = money(Account.objects.aggregate(total=Sum("opening_balance"))["total"])
     pending = DuePayment.objects.exclude(status="paid")
+    pending_totals = pending.aggregate(
+        payable=Sum("amount", filter=Q(due_type="payable")),
+        receivable=Sum("amount", filter=Q(due_type="receivable")),
+    )
+    
+    accounts = Account.objects.annotate(
+        account_income=Sum("transactions__amount", filter=Q(transactions__transaction_type="income")),
+        account_expense=Sum("transactions__amount", filter=Q(transactions__transaction_type="expense"))
+    ).order_by("name")
+
     account_summaries = []
-    for account in Account.objects.all().order_by("name"):
-        account_tx = account.transactions.all()
-        account_income = money(account_tx.filter(transaction_type="income").aggregate(total=Sum("amount"))["total"])
-        account_expense = money(account_tx.filter(transaction_type="expense").aggregate(total=Sum("amount"))["total"])
+    for account in accounts:
+        inc = money(account.account_income)
+        exp = money(account.account_expense)
         account_summaries.append(
             {
                 "id": account.id,
                 "name": account.name,
                 "account_type": account.account_type,
                 "opening_balance": account.opening_balance,
-                "income": account_income,
-                "expense": account_expense,
-                "current_balance": account.opening_balance + account_income - account_expense,
+                "income": inc,
+                "expense": exp,
+                "current_balance": account.opening_balance + inc - exp,
             }
         )
 
@@ -208,8 +229,8 @@ def dashboard_view(request):
                 "income": income,
                 "expense": expense,
                 "current_balance": opening + income - expense,
-                "pending_payable": money(pending.filter(due_type="payable").aggregate(total=Sum("amount"))["total"]),
-                "pending_receivable": money(pending.filter(due_type="receivable").aggregate(total=Sum("amount"))["total"]),
+                "pending_payable": money(pending_totals["payable"]),
+                "pending_receivable": money(pending_totals["receivable"]),
             },
             "periods": {
                 "today": period_summary(today, today),
@@ -239,18 +260,23 @@ def reports_view(request):
         .order_by("month")
     )
     by_date = (
-        qs.values("date", "transaction_type")
+        qs.annotate(grouped_date=TruncDate("date"))
+        .values("grouped_date", "transaction_type")
         .annotate(total=Sum("amount"))
-        .order_by("date")
+        .order_by("grouped_date")
     )
-    income = money(qs.filter(transaction_type="income").aggregate(total=Sum("amount"))["total"])
-    expense = money(qs.filter(transaction_type="expense").aggregate(total=Sum("amount"))["total"])
+    totals = qs.aggregate(
+        income=Sum("amount", filter=Q(transaction_type="income")),
+        expense=Sum("amount", filter=Q(transaction_type="expense")),
+    )
+    income = money(totals["income"])
+    expense = money(totals["expense"])
     return Response(
         {
             "summary": {"income": income, "expense": expense, "balance": income - expense},
             "by_category": list(by_category),
             "by_month": list(by_month),
-            "by_date": list(by_date),
+            "by_date": [{"date": row["grouped_date"], "transaction_type": row["transaction_type"], "total": row["total"]} for row in by_date],
             "transactions": TransactionSerializer(qs[:200], many=True).data,
         }
     )
@@ -319,4 +345,3 @@ def create_backup_view(request):
         notes=request.data.get("notes", ""),
     )
     return Response(BackupRecordSerializer(record).data)
-

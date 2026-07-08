@@ -87,6 +87,12 @@ class Transaction(TimeStampedModel):
 
     class Meta:
         ordering = ["-date", "-created_at"]
+        indexes = [
+            models.Index(fields=["date", "transaction_type"]),
+            models.Index(fields=["category", "date"]),
+            models.Index(fields=["payment_method", "date"]),
+            models.Index(fields=["account", "date"]),
+        ]
 
     def __str__(self):
         return f"{self.title} - {self.amount}"
@@ -127,3 +133,16 @@ class BackupRecord(TimeStampedModel):
     backup_type = models.CharField(max_length=20, choices=BACKUP_TYPES, default="manual")
     file = models.FileField(upload_to="backups/")
     notes = models.CharField(max_length=200, blank=True)
+
+
+class AuditLog(TimeStampedModel):
+    ACTIONS = [("created", "Created"), ("updated", "Updated"), ("deleted", "Deleted")]
+
+    model_name = models.CharField(max_length=80)
+    object_id = models.PositiveIntegerField(blank=True, null=True)
+    action = models.CharField(max_length=20, choices=ACTIONS)
+    summary = models.TextField()
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, blank=True, null=True)
+
+    class Meta:
+        ordering = ["-created_at"]
