@@ -131,7 +131,11 @@ class BackupRecordViewSet(viewsets.ReadOnlyModelViewSet):
 @permission_classes([AllowAny])
 @ensure_csrf_cookie
 def csrf_view(request):
-    return Response({"detail": "CSRF cookie set."})
+    from django.middleware.csrf import get_token
+    return Response({
+        "detail": "CSRF cookie set.",
+        "csrfToken": get_token(request)
+    })
 
 
 @api_view(["POST"])
