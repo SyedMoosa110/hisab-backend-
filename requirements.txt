@@ -3,3 +3,5 @@ djangorestframework
 django-cors-headers
 openpyxl
 reportlab
+psycopg2-binary
+whitenoise
