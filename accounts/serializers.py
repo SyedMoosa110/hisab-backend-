@@ -1,8 +1,9 @@
 from pathlib import Path
 
+from django.db.models import Sum
 from rest_framework import serializers
 
-from .models import Account, BackupRecord, Category, DuePayment, Note, Party, Transaction
+from .models import Account, BackupRecord, Category, DuePayment, Note, Party, Transaction, Stock, Sale
 
 
 class AccountSerializer(serializers.ModelSerializer):
@@ -66,4 +67,39 @@ class BackupRecordSerializer(serializers.ModelSerializer):
     class Meta:
         model = BackupRecord
         fields = "__all__"
+
+
+class StockSerializer(serializers.ModelSerializer):
+    sold_stock = serializers.IntegerField(read_only=True)
+    remaining_stock = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Stock
+        fields = ["id", "name", "quantity", "unit_price", "sold_stock", "remaining_stock", "created_at", "updated_at"]
+
+
+class SaleSerializer(serializers.ModelSerializer):
+    stock_name = serializers.CharField(source="stock.name", read_only=True)
+    account_name = serializers.CharField(source="account.name", read_only=True)
+    total_price = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = Sale
+        fields = "__all__"
+
+    def validate(self, attrs):
+        stock = attrs.get('stock')
+        quantity = attrs.get('quantity')
+        
+        sold = stock.sales.aggregate(total=Sum('quantity'))['total'] or 0
+        if self.instance:
+            sold -= self.instance.quantity
+        
+        remaining = stock.quantity - sold
+        if quantity > remaining:
+            raise serializers.ValidationError({
+                "quantity": f"Sirf {remaining} stock baki hai. Aap {quantity} sale nahi kar sakte."
+            })
+        return attrs
+
 

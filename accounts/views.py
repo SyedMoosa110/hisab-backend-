@@ -19,7 +19,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 
-from .models import Account, BackupRecord, Category, DuePayment, Note, Party, Transaction
+from .models import Account, BackupRecord, Category, DuePayment, Note, Party, Transaction, Stock, Sale
 from .serializers import (
     AccountSerializer,
     BackupRecordSerializer,
@@ -28,6 +28,8 @@ from .serializers import (
     NoteSerializer,
     PartySerializer,
     TransactionSerializer,
+    StockSerializer,
+    SaleSerializer,
 )
 
 
@@ -335,3 +337,20 @@ def create_backup_view(request):
         notes=request.data.get("notes", ""),
     )
     return Response(BackupRecordSerializer(record).data)
+
+
+class StockViewSet(viewsets.ModelViewSet):
+    serializer_class = StockSerializer
+    queryset = Stock.objects.all()
+
+    def get_queryset(self):
+        return Stock.objects.annotate(
+            sold_stock=Coalesce(Sum("sales__quantity"), Value(0)),
+            remaining_stock=F("quantity") - Coalesce(Sum("sales__quantity"), Value(0))
+        ).order_by("name")
+
+
+class SaleViewSet(viewsets.ModelViewSet):
+    serializer_class = SaleSerializer
+    queryset = Sale.objects.select_related("stock", "account").order_by("-date", "-created_at")
+

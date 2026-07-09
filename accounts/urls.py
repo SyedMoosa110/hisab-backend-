@@ -11,6 +11,9 @@ router.register("transactions", views.TransactionViewSet)
 router.register("dues", views.DuePaymentViewSet)
 router.register("notes", views.NoteViewSet)
 router.register("backups", views.BackupRecordViewSet, basename="backups")
+router.register("stock", views.StockViewSet)
+router.register("sales", views.SaleViewSet)
+
 
 urlpatterns = [
     path("", include(router.urls)),

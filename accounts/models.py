@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.conf import settings
 from django.db import models
 
@@ -146,3 +147,64 @@ class AuditLog(TimeStampedModel):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class Stock(TimeStampedModel):
+    name = models.CharField(max_length=120, unique=True)
+    quantity = models.IntegerField(default=0)  # Total quantity of stock added
+    unit_price = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    def __str__(self):
+        return self.name
+
+
+class Sale(TimeStampedModel):
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="sales")
+    quantity = models.IntegerField()
+    sale_price = models.DecimalField(max_digits=14, decimal_places=2)
+    total_price = models.DecimalField(max_digits=14, decimal_places=2, blank=True, null=True)
+    date = models.DateField()
+    account = models.ForeignKey(Account, on_delete=models.PROTECT, related_name="sales")
+    transaction = models.ForeignKey(Transaction, on_delete=models.SET_NULL, null=True, blank=True, related_name="sales")
+    notes = models.TextField(blank=True)
+
+    def save(self, *args, **kwargs):
+        self.total_price = Decimal(self.quantity) * Decimal(self.sale_price)
+        
+        # Ensure category named "Sales" exists
+        sales_category, _ = Category.objects.get_or_create(
+            name="Sales",
+            category_type="income",
+            defaults={"color": "#10b981"}
+        )
+        
+        if not self.transaction:
+            tx = Transaction.objects.create(
+                transaction_type="income",
+                title=f"Stock Sale: {self.stock.name} x {self.quantity}",
+                category=sales_category,
+                account=self.account,
+                amount=self.total_price,
+                date=self.date,
+                notes=self.notes or f"Automated transaction for sale of {self.stock.name}."
+            )
+            self.transaction = tx
+        else:
+            tx = self.transaction
+            tx.title = f"Stock Sale: {self.stock.name} x {self.quantity}"
+            tx.account = self.account
+            tx.amount = self.total_price
+            tx.date = self.date
+            tx.notes = self.notes or f"Automated transaction for sale of {self.stock.name}."
+            tx.save()
+            
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.transaction:
+            self.transaction.delete()
+        super().delete(*args, **kwargs)
+
+    def __str__(self):
+        return f"Sale: {self.stock.name} x {self.quantity}"
+
