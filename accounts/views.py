@@ -354,3 +354,50 @@ class SaleViewSet(viewsets.ModelViewSet):
     serializer_class = SaleSerializer
     queryset = Sale.objects.select_related("stock", "account").order_by("-date", "-created_at")
 
+
+@api_view(["GET"])
+def export_sales_excel_view(request):
+    qs = Sale.objects.select_related("stock", "account").order_by("-date", "-created_at")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sales Statement"
+    ws.append(["Date", "Stock Item", "Quantity", "Sale Price (Rs)", "Total Price (Rs)", "Account", "Notes"])
+    for sale in qs:
+        ws.append([
+            sale.date.isoformat() if sale.date else "",
+            sale.stock.name if sale.stock else "",
+            sale.quantity,
+            sale.sale_price,
+            sale.total_price,
+            sale.account.name if sale.account else "",
+            sale.notes
+        ])
+    response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    response["Content-Disposition"] = 'attachment; filename="sales-statement.xlsx"'
+    wb.save(response)
+    return response
+
+
+@api_view(["GET"])
+def export_sales_pdf_view(request):
+    response = HttpResponse(content_type="application/pdf")
+    response["Content-Disposition"] = 'attachment; filename="sales-statement.pdf"'
+    pdf = canvas.Canvas(response, pagesize=A4)
+    width, height = A4
+    y = height - 50
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawString(40, y, "Sales Statement")
+    y -= 30
+    pdf.setFont("Helvetica", 9)
+    for sale in Sale.objects.select_related("stock", "account").order_by("-date", "-created_at"):
+        line = f"{sale.date} | {sale.stock.name if sale.stock else ''} | Qty: {sale.quantity} | Price: Rs {sale.sale_price} | Total: Rs {sale.total_price} | Account: {sale.account.name if sale.account else ''}"
+        pdf.drawString(40, y, line[:115])
+        y -= 18
+        if y < 50:
+            pdf.showPage()
+            y = height - 50
+            pdf.setFont("Helvetica", 9)
+    pdf.save()
+    return response
+
+
