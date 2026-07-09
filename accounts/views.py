@@ -14,6 +14,9 @@ from django.utils import timezone
 from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser
@@ -382,22 +385,118 @@ def export_sales_excel_view(request):
 def export_sales_pdf_view(request):
     response = HttpResponse(content_type="application/pdf")
     response["Content-Disposition"] = 'attachment; filename="sales-statement.pdf"'
-    pdf = canvas.Canvas(response, pagesize=A4)
-    width, height = A4
-    y = height - 50
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(40, y, "Sales Statement")
-    y -= 30
-    pdf.setFont("Helvetica", 9)
-    for sale in Sale.objects.select_related("stock", "account").order_by("-date", "-created_at"):
-        line = f"{sale.date} | {sale.stock.name if sale.stock else ''} | Qty: {sale.quantity} | Price: Rs {sale.sale_price} | Total: Rs {sale.total_price} | Account: {sale.account.name if sale.account else ''}"
-        pdf.drawString(40, y, line[:115])
-        y -= 18
-        if y < 50:
-            pdf.showPage()
-            y = height - 50
-            pdf.setFont("Helvetica", 9)
-    pdf.save()
+    
+    doc = SimpleDocTemplate(
+        response,
+        pagesize=A4,
+        rightMargin=40,
+        leftMargin=40,
+        topMargin=40,
+        bottomMargin=40
+    )
+    
+    story = []
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Heading1'],
+        fontName='Helvetica-Bold',
+        fontSize=20,
+        textColor=colors.HexColor('#0f766e'),
+        spaceAfter=4
+    )
+    
+    subtitle_style = ParagraphStyle(
+        'DocSubtitle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=9,
+        textColor=colors.HexColor('#64748b'),
+        spaceAfter=15
+    )
+    
+    cell_style = ParagraphStyle(
+        'CellText',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=9,
+        textColor=colors.HexColor('#1e293b')
+    )
+
+    cell_header_style = ParagraphStyle(
+        'CellHeader',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=9,
+        textColor=colors.white
+    )
+
+    story.append(Paragraph("HisabPro", title_style))
+    story.append(Paragraph("Sales Ledger Statement - Generated on " + timezone.now().strftime("%Y-%m-%d %H:%M"), subtitle_style))
+    story.append(Spacer(1, 10))
+    
+    headers = [
+        Paragraph("Date", cell_header_style),
+        Paragraph("Stock Item", cell_header_style),
+        Paragraph("Qty", cell_header_style),
+        Paragraph("Rate (Rs)", cell_header_style),
+        Paragraph("Total Price (Rs)", cell_header_style),
+        Paragraph("Account", cell_header_style)
+    ]
+    
+    table_data = [headers]
+    
+    sales = Sale.objects.select_related("stock", "account").order_by("-date", "-created_at")
+    total_sales_amount = Decimal(0)
+    
+    for sale in sales:
+        total_sales_amount += sale.total_price or Decimal(0)
+        table_data.append([
+            Paragraph(sale.date.isoformat() if sale.date else "-", cell_style),
+            Paragraph(sale.stock.name if sale.stock else "-", cell_style),
+            Paragraph(str(sale.quantity), cell_style),
+            Paragraph(f"Rs {sale.sale_price:,.0f}", cell_style),
+            Paragraph(f"Rs {sale.total_price:,.0f}", cell_style),
+            Paragraph(sale.account.name if sale.account else "-", cell_style)
+        ])
+        
+    col_widths = [70, 150, 40, 75, 85, 95]
+    sales_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    
+    t_style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0f766e')),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cbd5e1')),
+    ])
+    
+    for i in range(1, len(table_data)):
+        bg_color = colors.HexColor('#f8fafc') if i % 2 == 0 else colors.white
+        t_style.add('BACKGROUND', (0, i), (-1, i), bg_color)
+        
+    sales_table.setStyle(t_style)
+    story.append(sales_table)
+    story.append(Spacer(1, 15))
+    
+    summary_data = [
+        [Paragraph("<strong>Total Sales:</strong>", cell_style), Paragraph(f"<strong>Rs {total_sales_amount:,.0f}</strong>", cell_style)]
+    ]
+    summary_table = Table(summary_data, colWidths=[100, 150])
+    summary_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LINEBELOW', (0, 0), (-1, -1), 1.5, colors.HexColor('#0f766e')),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    
+    story.append(summary_table)
+    doc.build(story)
     return response
 
 
