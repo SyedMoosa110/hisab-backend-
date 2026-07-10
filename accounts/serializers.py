@@ -98,7 +98,7 @@ class SaleSerializer(serializers.ModelSerializer):
         remaining = stock.quantity - sold
         if quantity > remaining:
             raise serializers.ValidationError({
-                "quantity": f"Sirf {remaining} stock baki hai. Aap {quantity} sale nahi kar sakte."
+                "quantity": f"Only {remaining} items remaining in stock. You cannot sell {quantity} items."
             })
         return attrs
 
