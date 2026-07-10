@@ -238,6 +238,7 @@ def register_view(request):
         login(request, user)
         return Response({
             "username": user.username,
+            "owner_name": owner_name,
             "is_staff": user.is_staff,
             "company_name": company.name,
             "role": "admin"
@@ -256,15 +257,18 @@ def login_view(request):
     
     company_name = "Default Business"
     role = "staff"
+    owner_name = user.first_name or user.username
     try:
         if hasattr(user, 'profile'):
             company_name = user.profile.company.name if user.profile.company else "Default Business"
             role = user.profile.role
+            owner_name = user.profile.owner_name or user.first_name or user.username
     except Exception:
         pass
 
     return Response({
         "username": user.username,
+        "owner_name": owner_name,
         "is_staff": user.is_staff,
         "company_name": company_name,
         "role": role
@@ -287,14 +291,17 @@ def logout_view(request):
 def me_view(request):
     company_name = "Default Business"
     role = "staff"
+    owner_name = request.user.first_name or request.user.username
     try:
         if hasattr(request.user, 'profile'):
             company_name = request.user.profile.company.name if request.user.profile.company else "Default Business"
             role = request.user.profile.role
+            owner_name = request.user.profile.owner_name or request.user.first_name or request.user.username
     except Exception:
         pass
     return Response({
         "username": request.user.username,
+        "owner_name": owner_name,
         "is_staff": request.user.is_staff,
         "company_name": company_name,
         "role": role
