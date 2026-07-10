@@ -23,7 +23,7 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 
-from .models import Account, BackupRecord, Category, DuePayment, Note, Party, Transaction, Stock, Sale, UserProfile
+from .models import Account, BackupRecord, Category, Company, DuePayment, Note, Party, Transaction, Stock, Sale, UserProfile
 from .serializers import (
     AccountSerializer,
     BackupRecordSerializer,
@@ -43,6 +43,11 @@ def money(value):
 
 def filtered_transactions(request):
     qs = Transaction.objects.select_related("category", "account", "party")
+    if request.user.is_authenticated:
+        try:
+            qs = qs.filter(company=request.user.profile.company)
+        except AttributeError:
+            pass
     start = request.query_params.get("start")
     end = request.query_params.get("end")
     category = request.query_params.get("category")
@@ -82,6 +87,7 @@ class AccountViewSet(viewsets.ModelViewSet):
     queryset = Account.objects.all()
 
     def get_queryset(self):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
         delta = Sum(
             Case(
                 When(transactions__transaction_type="income", then=F("transactions__amount")),
@@ -90,19 +96,39 @@ class AccountViewSet(viewsets.ModelViewSet):
                 output_field=DecimalField(max_digits=14, decimal_places=2),
             )
         )
-        return Account.objects.annotate(
+        return Account.objects.filter(company=company).annotate(
             current_balance=F("opening_balance") + Coalesce(delta, Value(0, output_field=DecimalField(max_digits=14, decimal_places=2)))
         )
+
+    def perform_create(self, serializer):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        serializer.save(company=company)
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
     serializer_class = CategorySerializer
-    queryset = Category.objects.all().order_by("category_type", "name")
+    queryset = Category.objects.all()
+
+    def get_queryset(self):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        return Category.objects.filter(company=company).order_by("category_type", "name")
+
+    def perform_create(self, serializer):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        serializer.save(company=company)
 
 
 class PartyViewSet(viewsets.ModelViewSet):
     serializer_class = PartySerializer
-    queryset = Party.objects.all().order_by("name")
+    queryset = Party.objects.all()
+
+    def get_queryset(self):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        return Party.objects.filter(company=company).order_by("name")
+
+    def perform_create(self, serializer):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        serializer.save(company=company)
 
 
 class TransactionViewSet(viewsets.ModelViewSet):
@@ -116,21 +142,45 @@ class TransactionViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(self.get_queryset()[:200], many=True)
         return Response(serializer.data)
 
+    def perform_create(self, serializer):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        serializer.save(company=company)
+
 
 class DuePaymentViewSet(viewsets.ModelViewSet):
     serializer_class = DuePaymentSerializer
     queryset = DuePayment.objects.select_related("party")
+
+    def get_queryset(self):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        return DuePayment.objects.filter(company=company).select_related("party")
+
+    def perform_create(self, serializer):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        serializer.save(company=company)
 
 
 class NoteViewSet(viewsets.ModelViewSet):
     serializer_class = NoteSerializer
     queryset = Note.objects.all()
 
+    def get_queryset(self):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        return Note.objects.filter(company=company)
+
+    def perform_create(self, serializer):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        serializer.save(company=company)
+
 
 class BackupRecordViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = BackupRecordSerializer
     queryset = BackupRecord.objects.all()
     permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        return BackupRecord.objects.filter(company=company)
 
 
 @api_view(["GET"])
@@ -160,25 +210,38 @@ def register_view(request):
     if User.objects.filter(username=email).exists() or User.objects.filter(email=email).exists():
         return Response({"detail": "This email is already registered."}, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        user = User.objects.create(
-            username=email,
-            email=email,
-            first_name=owner_name,
-            is_staff=True
-        )
-        user.set_password(password)
-        user.save()
+    from django.db import transaction
+    if Company.objects.filter(name=business_name).exists():
+        return Response({"detail": "This business name is already registered."}, status=status.HTTP_400_BAD_REQUEST)
 
-        UserProfile.objects.create(
-            user=user,
-            business_name=business_name,
-            owner_name=owner_name,
-            phone=phone
-        )
+    try:
+        with transaction.atomic():
+            company = Company.objects.create(name=business_name)
+            user = User.objects.create(
+                username=email,
+                email=email,
+                first_name=owner_name,
+                is_staff=True
+            )
+            user.set_password(password)
+            user.save()
+
+            UserProfile.objects.create(
+                user=user,
+                business_name=business_name,
+                owner_name=owner_name,
+                phone=phone,
+                company=company,
+                role='admin'
+            )
 
         login(request, user)
-        return Response({"username": user.username, "is_staff": user.is_staff})
+        return Response({
+            "username": user.username,
+            "is_staff": user.is_staff,
+            "company_name": company.name,
+            "role": "admin"
+        })
     except Exception as e:
         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -190,7 +253,22 @@ def login_view(request):
     if not user or not user.is_staff:
         return Response({"detail": "Invalid credentials."}, status=status.HTTP_400_BAD_REQUEST)
     login(request, user)
-    return Response({"username": user.username, "is_staff": user.is_staff})
+    
+    company_name = "Default Business"
+    role = "staff"
+    try:
+        if hasattr(user, 'profile'):
+            company_name = user.profile.company.name if user.profile.company else "Default Business"
+            role = user.profile.role
+    except Exception:
+        pass
+
+    return Response({
+        "username": user.username,
+        "is_staff": user.is_staff,
+        "company_name": company_name,
+        "role": role
+    })
 
 
 class CsrfExemptSessionAuthentication(SessionAuthentication):
@@ -207,7 +285,20 @@ def logout_view(request):
 
 @api_view(["GET"])
 def me_view(request):
-    return Response({"username": request.user.username, "is_staff": request.user.is_staff})
+    company_name = "Default Business"
+    role = "staff"
+    try:
+        if hasattr(request.user, 'profile'):
+            company_name = request.user.profile.company.name if request.user.profile.company else "Default Business"
+            role = request.user.profile.role
+    except Exception:
+        pass
+    return Response({
+        "username": request.user.username,
+        "is_staff": request.user.is_staff,
+        "company_name": company_name,
+        "role": role
+    })
 
 
 @api_view(["POST"])
@@ -226,8 +317,8 @@ def change_password_view(request):
     return Response({"detail": "Password changed."})
 
 
-def period_summary(start, end):
-    totals = Transaction.objects.filter(date__gte=start, date__lte=end).aggregate(
+def period_summary(company, start, end):
+    totals = Transaction.objects.filter(company=company, date__gte=start, date__lte=end).aggregate(
         income=Sum("amount", filter=Q(transaction_type="income")),
         expense=Sum("amount", filter=Q(transaction_type="expense")),
     )
@@ -243,21 +334,22 @@ def dashboard_view(request):
     month_start = today.replace(day=1)
     year_start = today.replace(month=1, day=1)
     
-    tx = Transaction.objects.all()
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    tx = Transaction.objects.filter(company=company)
     totals = tx.aggregate(
         income=Sum("amount", filter=Q(transaction_type="income")),
         expense=Sum("amount", filter=Q(transaction_type="expense")),
     )
     income = money(totals["income"])
     expense = money(totals["expense"])
-    opening = money(Account.objects.aggregate(total=Sum("opening_balance"))["total"])
-    pending = DuePayment.objects.exclude(status="paid")
+    opening = money(Account.objects.filter(company=company).aggregate(total=Sum("opening_balance"))["total"])
+    pending = DuePayment.objects.filter(company=company).exclude(status="paid")
     pending_totals = pending.aggregate(
         payable=Sum("amount", filter=Q(due_type="payable")),
         receivable=Sum("amount", filter=Q(due_type="receivable")),
     )
     
-    accounts = Account.objects.annotate(
+    accounts = Account.objects.filter(company=company).annotate(
         account_income=Sum("transactions__amount", filter=Q(transactions__transaction_type="income")),
         account_expense=Sum("transactions__amount", filter=Q(transactions__transaction_type="expense"))
     ).order_by("name")
@@ -288,10 +380,10 @@ def dashboard_view(request):
                 "pending_receivable": money(pending_totals["receivable"]),
             },
             "periods": {
-                "today": period_summary(today, today),
-                "week": period_summary(week_start, today),
-                "month": period_summary(month_start, today),
-                "year": period_summary(year_start, today),
+                "today": period_summary(company, today, today),
+                "week": period_summary(company, week_start, today),
+                "month": period_summary(company, month_start, today),
+                "year": period_summary(company, year_start, today),
             },
             "account_summaries": account_summaries,
             "recent_transactions": TransactionSerializer(tx.select_related("category", "account", "party")[:8], many=True).data,
@@ -380,7 +472,9 @@ def create_backup_view(request):
     filename = f"backup-{timezone.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
     target = backups_dir / filename
     shutil.copyfile(settings.DATABASES["default"]["NAME"], target)
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
     record = BackupRecord.objects.create(
+        company=company,
         backup_type=request.data.get("backup_type", "manual"),
         file=f"backups/{filename}",
         notes=request.data.get("notes", ""),
@@ -393,20 +487,34 @@ class StockViewSet(viewsets.ModelViewSet):
     queryset = Stock.objects.all()
 
     def get_queryset(self):
-        return Stock.objects.annotate(
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        return Stock.objects.filter(company=company).annotate(
             sold_stock=Coalesce(Sum("sales__quantity"), Value(0)),
             remaining_stock=F("quantity") - Coalesce(Sum("sales__quantity"), Value(0))
         ).order_by("name")
+
+    def perform_create(self, serializer):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        serializer.save(company=company)
 
 
 class SaleViewSet(viewsets.ModelViewSet):
     serializer_class = SaleSerializer
     queryset = Sale.objects.select_related("stock", "account").order_by("-date", "-created_at")
 
+    def get_queryset(self):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        return Sale.objects.filter(company=company).select_related("stock", "account").order_by("-date", "-created_at")
+
+    def perform_create(self, serializer):
+        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
+        serializer.save(company=company)
+
 
 @api_view(["GET"])
 def export_sales_excel_view(request):
-    qs = Sale.objects.select_related("stock", "account").order_by("-date", "-created_at")
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    qs = Sale.objects.filter(company=company).select_related("stock", "account").order_by("-date", "-created_at")
     wb = Workbook()
     ws = wb.active
     ws.title = "Sales Statement"
@@ -493,7 +601,8 @@ def export_sales_pdf_view(request):
     
     table_data = [headers]
     
-    sales = Sale.objects.select_related("stock", "account").order_by("-date", "-created_at")
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    sales = Sale.objects.filter(company=company).select_related("stock", "account").order_by("-date", "-created_at")
     total_sales_amount = Decimal(0)
     
     for sale in sales:

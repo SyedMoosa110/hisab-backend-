@@ -11,6 +11,13 @@ class TimeStampedModel(models.Model):
         abstract = True
 
 
+class Company(TimeStampedModel):
+    name = models.CharField(max_length=255, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
 class Account(TimeStampedModel):
     ACCOUNT_TYPES = [
         ("cash", "Cash"),
@@ -19,6 +26,7 @@ class Account(TimeStampedModel):
         ("jazzcash", "JazzCash"),
     ]
 
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="accounts", null=True, blank=True)
     name = models.CharField(max_length=120)
     account_type = models.CharField(max_length=20, choices=ACCOUNT_TYPES)
     opening_balance = models.DecimalField(max_digits=14, decimal_places=2, default=0)
@@ -31,6 +39,7 @@ class Account(TimeStampedModel):
 class Category(TimeStampedModel):
     CATEGORY_TYPES = [("income", "Income"), ("expense", "Expense")]
 
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="categories", null=True, blank=True)
     name = models.CharField(max_length=120)
     category_type = models.CharField(max_length=10, choices=CATEGORY_TYPES)
     color = models.CharField(max_length=20, default="#2563eb")
@@ -51,6 +60,7 @@ class Party(TimeStampedModel):
         ("other", "Other"),
     ]
 
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="parties", null=True, blank=True)
     name = models.CharField(max_length=160)
     party_type = models.CharField(max_length=20, choices=PARTY_TYPES, default="other")
     phone = models.CharField(max_length=40, blank=True)
@@ -64,6 +74,7 @@ class Party(TimeStampedModel):
 
 class Transaction(TimeStampedModel):
     TRANSACTION_TYPES = [("income", "Income"), ("expense", "Expense")]
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="transactions", null=True, blank=True)
     PAYMENT_METHODS = [
         ("cash", "Cash"),
         ("bank", "Bank Transfer"),
@@ -101,6 +112,7 @@ class Transaction(TimeStampedModel):
 
 class DuePayment(TimeStampedModel):
     DUE_TYPES = [("payable", "Payable"), ("receivable", "Receivable")]
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="due_payments", null=True, blank=True)
     STATUS = [("pending", "Pending"), ("paid", "Paid"), ("overdue", "Overdue")]
 
     party = models.ForeignKey(Party, on_delete=models.SET_NULL, blank=True, null=True)
@@ -119,6 +131,7 @@ class DuePayment(TimeStampedModel):
 
 
 class Note(TimeStampedModel):
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="notes", null=True, blank=True)
     title = models.CharField(max_length=180)
     body = models.TextField()
     reminder_date = models.DateField(blank=True, null=True)
@@ -130,6 +143,7 @@ class Note(TimeStampedModel):
 
 class BackupRecord(TimeStampedModel):
     BACKUP_TYPES = [("manual", "Manual"), ("daily", "Daily"), ("weekly", "Weekly")]
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="backups", null=True, blank=True)
 
     backup_type = models.CharField(max_length=20, choices=BACKUP_TYPES, default="manual")
     file = models.FileField(upload_to="backups/")
@@ -138,6 +152,7 @@ class BackupRecord(TimeStampedModel):
 
 class AuditLog(TimeStampedModel):
     ACTIONS = [("created", "Created"), ("updated", "Updated"), ("deleted", "Deleted")]
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="audit_logs", null=True, blank=True)
 
     model_name = models.CharField(max_length=80)
     object_id = models.PositiveIntegerField(blank=True, null=True)
@@ -150,6 +165,7 @@ class AuditLog(TimeStampedModel):
 
 
 class Stock(TimeStampedModel):
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="stocks", null=True, blank=True)
     name = models.CharField(max_length=120, unique=True)
     quantity = models.IntegerField(default=0)  # Total quantity of stock added
     unit_price = models.DecimalField(max_digits=14, decimal_places=2, default=0)
@@ -159,6 +175,7 @@ class Stock(TimeStampedModel):
 
 
 class Sale(TimeStampedModel):
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="sale_records", null=True, blank=True)
     stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="sales")
     quantity = models.IntegerField()
     sale_price = models.DecimalField(max_digits=14, decimal_places=2)
@@ -211,10 +228,12 @@ class Sale(TimeStampedModel):
 
 class UserProfile(TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
-    business_name = models.CharField(max_length=255)
-    owner_name = models.CharField(max_length=255)
-    phone = models.CharField(max_length=50)
+    business_name = models.CharField(max_length=255, blank=True)
+    owner_name = models.CharField(max_length=255, blank=True)
+    phone = models.CharField(max_length=50, blank=True)
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="user_profiles", null=True, blank=True)
+    role = models.CharField(max_length=20, choices=[('admin', 'Admin'), ('manager', 'Manager'), ('staff', 'Staff')], default='staff')
 
     def __str__(self):
-        return f"{self.business_name} ({self.owner_name})"
+        return f"{self.user.username} - {self.company.name if self.company else 'No Company'} ({self.role})"
 

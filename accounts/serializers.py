@@ -12,18 +12,21 @@ class AccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = Account
         fields = "__all__"
+        read_only_fields = ["company"]
 
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = "__all__"
+        read_only_fields = ["company"]
 
 
 class PartySerializer(serializers.ModelSerializer):
     class Meta:
         model = Party
         fields = "__all__"
+        read_only_fields = ["company"]
 
 
 class TransactionSerializer(serializers.ModelSerializer):
@@ -47,6 +50,7 @@ class TransactionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Transaction
         fields = "__all__"
+        read_only_fields = ["company"]
 
 
 class DuePaymentSerializer(serializers.ModelSerializer):
@@ -55,18 +59,21 @@ class DuePaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = DuePayment
         fields = "__all__"
+        read_only_fields = ["company"]
 
 
 class NoteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Note
         fields = "__all__"
+        read_only_fields = ["company"]
 
 
 class BackupRecordSerializer(serializers.ModelSerializer):
     class Meta:
         model = BackupRecord
         fields = "__all__"
+        read_only_fields = ["company"]
 
 
 class StockSerializer(serializers.ModelSerializer):
@@ -86,6 +93,7 @@ class SaleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Sale
         fields = "__all__"
+        read_only_fields = ["company"]
 
     def validate(self, attrs):
         stock = attrs.get('stock')
