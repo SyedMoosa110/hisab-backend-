@@ -208,3 +208,13 @@ class Sale(TimeStampedModel):
     def __str__(self):
         return f"Sale: {self.stock.name} x {self.quantity}"
 
+
+class UserProfile(TimeStampedModel):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
+    business_name = models.CharField(max_length=255)
+    owner_name = models.CharField(max_length=255)
+    phone = models.CharField(max_length=50)
+
+    def __str__(self):
+        return f"{self.business_name} ({self.owner_name})"
+

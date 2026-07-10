@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Account, BackupRecord, Category, DuePayment, Note, Party, Transaction, Stock, Sale
+from .models import Account, BackupRecord, Category, DuePayment, Note, Party, Transaction, Stock, Sale, UserProfile
 
 
 admin.site.register(Account)
@@ -12,3 +12,4 @@ admin.site.register(Note)
 admin.site.register(BackupRecord)
 admin.site.register(Stock)
 admin.site.register(Sale)
+admin.site.register(UserProfile)

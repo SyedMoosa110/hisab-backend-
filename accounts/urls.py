@@ -19,6 +19,7 @@ urlpatterns = [
     path("", include(router.urls)),
     path("auth/csrf/", views.csrf_view),
     path("auth/login/", views.login_view),
+    path("auth/register/", views.register_view),
     path("auth/logout/", views.logout_view),
     path("auth/me/", views.me_view),
     path("auth/change-password/", views.change_password_view),

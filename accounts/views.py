@@ -18,11 +18,12 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from rest_framework import status, viewsets
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.authentication import SessionAuthentication
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 
-from .models import Account, BackupRecord, Category, DuePayment, Note, Party, Transaction, Stock, Sale
+from .models import Account, BackupRecord, Category, DuePayment, Note, Party, Transaction, Stock, Sale, UserProfile
 from .serializers import (
     AccountSerializer,
     BackupRecordSerializer,
@@ -145,15 +146,60 @@ def csrf_view(request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+def register_view(request):
+    business_name = request.data.get("business_name")
+    owner_name = request.data.get("owner_name")
+    email = request.data.get("email")
+    phone = request.data.get("phone")
+    password = request.data.get("password")
+
+    if not business_name or not owner_name or not email or not phone or not password:
+        return Response({"detail": "All fields are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    from django.contrib.auth.models import User
+    if User.objects.filter(username=email).exists() or User.objects.filter(email=email).exists():
+        return Response({"detail": "This email is already registered."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = User.objects.create(
+            username=email,
+            email=email,
+            first_name=owner_name,
+            is_staff=True
+        )
+        user.set_password(password)
+        user.save()
+
+        UserProfile.objects.create(
+            user=user,
+            business_name=business_name,
+            owner_name=owner_name,
+            phone=phone
+        )
+
+        login(request, user)
+        return Response({"username": user.username, "is_staff": user.is_staff})
+    except Exception as e:
+        return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
 def login_view(request):
     user = authenticate(username=request.data.get("username"), password=request.data.get("password"))
     if not user or not user.is_staff:
-        return Response({"detail": "Invalid admin credentials."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": "Invalid credentials."}, status=status.HTTP_400_BAD_REQUEST)
     login(request, user)
     return Response({"username": user.username, "is_staff": user.is_staff})
 
 
+class CsrfExemptSessionAuthentication(SessionAuthentication):
+    def enforce_csrf(self, request):
+        return
+
+
 @api_view(["POST"])
+@authentication_classes([CsrfExemptSessionAuthentication])
 def logout_view(request):
     logout(request)
     return Response({"detail": "Logged out"})
