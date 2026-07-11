@@ -693,9 +693,69 @@ def import_transactions_view(request):
         return Response({"detail": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
         
     try:
-        from openpyxl import load_workbook
         from datetime import datetime
         
+        # Support PDF Import
+        if file.name.lower().endswith(".pdf"):
+            from pypdf import PdfReader
+            import re
+            
+            reader = PdfReader(file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
+                
+            pattern = re.compile(r'(\d{4}-\d{2}-\d{2})\s*\|\s*(INCOME|EXPENSE)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*(?:Rs\s*)?([\d,.]+)', re.IGNORECASE)
+            
+            count = 0
+            from django.db import transaction as db_transaction
+            
+            with db_transaction.atomic():
+                for line in text.splitlines():
+                    match = pattern.search(line)
+                    if not match:
+                        continue
+                        
+                    raw_date, tx_type_str, title, cat_name, amt_str = match.groups()
+                    tx_type = tx_type_str.lower()
+                    title = title.strip()
+                    cat_name = cat_name.strip()
+                    amount = Decimal(amt_str.replace(",", ""))
+                    
+                    try:
+                        tx_date = datetime.strptime(raw_date.strip(), "%Y-%m-%d").date()
+                    except ValueError:
+                        tx_date = timezone.localdate()
+                        
+                    category, _ = Category.objects.get_or_create(
+                        company=company,
+                        name=cat_name,
+                        category_type=tx_type,
+                        defaults={"color": "#2563eb"}
+                    )
+                    
+                    account, _ = Account.objects.get_or_create(
+                        company=company,
+                        name="Cash",
+                        defaults={"account_type": "cash", "opening_balance": 0}
+                    )
+                    
+                    Transaction.objects.create(
+                        company=company,
+                        transaction_type=tx_type,
+                        title=title,
+                        category=category,
+                        account=account,
+                        amount=amount,
+                        date=tx_date,
+                        payment_method="cash"
+                    )
+                    count += 1
+                    
+            return Response({"detail": f"Successfully imported {count} transactions from PDF."})
+            
+        # Default Excel Import
+        from openpyxl import load_workbook
         wb = load_workbook(file, read_only=True)
         ws = wb.active
         
@@ -803,7 +863,7 @@ def import_transactions_view(request):
                 
         return Response({"detail": f"Successfully imported {count} transactions."})
     except Exception as e:
-        return Response({"detail": f"Error parsing Excel: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": f"Error parsing file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(["POST"])
@@ -817,9 +877,65 @@ def import_sales_view(request):
         return Response({"detail": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
         
     try:
-        from openpyxl import load_workbook
         from datetime import datetime
         
+        # Support PDF Import
+        if file.name.lower().endswith(".pdf"):
+            from pypdf import PdfReader
+            import re
+            
+            reader = PdfReader(file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
+                
+            # Regex for PDF Sales ledger table rows
+            pattern = re.compile(r'^(\d{4}-\d{2}-\d{2})\s+(.+?)\s+(\d+)\s+(?:Rs\s*)?([\d,.]+)\s+(?:Rs\s*)?([\d,.]+)\s+(.+)$', re.MULTILINE)
+            
+            count = 0
+            from django.db import transaction as db_transaction
+            
+            with db_transaction.atomic():
+                for match in pattern.finditer(text):
+                    raw_date, stock_name, qty_str, price_str, total_str, acc_name = match.groups()
+                    
+                    stock_name = stock_name.strip()
+                    qty = int(qty_str)
+                    price = Decimal(price_str.replace(",", ""))
+                    acc_name = acc_name.strip()
+                    
+                    try:
+                        sale_date = datetime.strptime(raw_date.strip(), "%Y-%m-%d").date()
+                    except ValueError:
+                        sale_date = timezone.localdate()
+                        
+                    stock, _ = Stock.objects.get_or_create(
+                        company=company,
+                        name=stock_name,
+                        defaults={"quantity": 10000, "unit_price": 0}
+                    )
+                    
+                    account, _ = Account.objects.get_or_create(
+                        company=company,
+                        name=acc_name,
+                        defaults={"account_type": "cash", "opening_balance": 0}
+                    )
+                    
+                    Sale.objects.create(
+                        company=company,
+                        stock=stock,
+                        quantity=qty,
+                        sale_price=price,
+                        account=account,
+                        date=sale_date,
+                        notes="Imported from PDF."
+                    )
+                    count += 1
+                    
+            return Response({"detail": f"Successfully imported {count} sales from PDF."})
+            
+        # Default Excel Import
+        from openpyxl import load_workbook
         wb = load_workbook(file, read_only=True)
         ws = wb.active
         
@@ -904,6 +1020,6 @@ def import_sales_view(request):
                 
         return Response({"detail": f"Successfully imported {count} sales."})
     except Exception as e:
-        return Response({"detail": f"Error parsing Excel: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": f"Error parsing file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
 
