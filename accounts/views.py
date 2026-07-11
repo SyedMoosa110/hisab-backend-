@@ -542,7 +542,7 @@ def export_sales_excel_view(request):
     wb = Workbook()
     ws = wb.active
     ws.title = "Sales Statement"
-    ws.append(["Date", "Stock Item", "Quantity", "Sale Price (Rs)", "Total Price (Rs)", "Account", "Notes"])
+    ws.append(["Date", "Stock Item", "Quantity", "Sale Price (Rs)", "Total Price (Rs)", "Account", "Notes", "Customer Name", "Customer Phone", "Customer Address"])
     for sale in qs:
         ws.append([
             sale.date.isoformat() if sale.date else "",
@@ -551,7 +551,10 @@ def export_sales_excel_view(request):
             sale.sale_price,
             sale.total_price,
             sale.account.name if sale.account else "",
-            sale.notes
+            sale.notes,
+            sale.customer_name or "",
+            sale.customer_phone or "",
+            sale.customer_address or ""
         ])
     response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     response["Content-Disposition"] = 'attachment; filename="sales-statement.xlsx"'
@@ -677,5 +680,230 @@ def export_sales_pdf_view(request):
     story.append(summary_table)
     doc.build(story)
     return response
+
+
+@api_view(["POST"])
+def import_transactions_view(request):
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    if not company:
+        return Response({"detail": "User has no associated company."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    file = request.FILES.get("file")
+    if not file:
+        return Response({"detail": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        from openpyxl import load_workbook
+        from datetime import datetime
+        
+        wb = load_workbook(file, read_only=True)
+        ws = wb.active
+        
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return Response({"detail": "Empty Excel sheet."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        header = [str(x).strip().lower() for x in rows[0] if x is not None]
+        if "type" not in header or "category" not in header or "account" not in header:
+            return Response({"detail": "Invalid Excel file format. Header must match the exported transaction statement format."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        def idx_of(name):
+            try:
+                return header.index(name)
+            except ValueError:
+                return -1
+                
+        date_idx = idx_of("date")
+        type_idx = idx_of("type")
+        title_idx = idx_of("title")
+        category_idx = idx_of("category")
+        account_idx = idx_of("account")
+        party_idx = idx_of("party")
+        method_idx = idx_of("method")
+        reference_idx = idx_of("reference")
+        debit_idx = idx_of("debit")
+        credit_idx = idx_of("credit")
+        
+        count = 0
+        from django.db import transaction as db_transaction
+        
+        with db_transaction.atomic():
+            for row in rows[1:]:
+                if not any(row):
+                    continue
+                    
+                tx_type = str(row[type_idx]).strip().lower() if type_idx != -1 and row[type_idx] is not None else "income"
+                if tx_type not in ["income", "expense"]:
+                    tx_type = "income"
+                    
+                title = str(row[title_idx]).strip() if title_idx != -1 and row[title_idx] is not None else "Imported Transaction"
+                
+                raw_date = row[date_idx] if date_idx != -1 else None
+                if isinstance(raw_date, datetime):
+                    tx_date = raw_date.date()
+                elif isinstance(raw_date, str):
+                    try:
+                        tx_date = datetime.strptime(raw_date.strip(), "%Y-%m-%d").date()
+                    except ValueError:
+                        tx_date = timezone.localdate()
+                else:
+                    tx_date = timezone.localdate()
+                    
+                debit_val = row[debit_idx] if debit_idx != -1 else None
+                credit_val = row[credit_idx] if credit_idx != -1 else None
+                
+                if tx_type == "expense":
+                    amount = Decimal(str(debit_val or 0))
+                else:
+                    amount = Decimal(str(credit_val or 0))
+                    
+                if amount <= 0:
+                    amount = Decimal(str(credit_val or debit_val or 0))
+                    
+                cat_name = str(row[category_idx]).strip() if category_idx != -1 and row[category_idx] is not None else "Uncategorized"
+                category, _ = Category.objects.get_or_create(
+                    company=company,
+                    name=cat_name,
+                    category_type=tx_type,
+                    defaults={"color": "#2563eb"}
+                )
+                
+                acc_name = str(row[account_idx]).strip() if account_idx != -1 and row[account_idx] is not None else "Cash"
+                account, _ = Account.objects.get_or_create(
+                    company=company,
+                    name=acc_name,
+                    defaults={"account_type": "cash", "opening_balance": 0}
+                )
+                
+                party = None
+                p_name = str(row[party_idx]).strip() if party_idx != -1 and row[party_idx] is not None else ""
+                if p_name:
+                    party, _ = Party.objects.get_or_create(
+                        company=company,
+                        name=p_name,
+                        defaults={"party_type": "customer"}
+                    )
+                    
+                method = str(row[method_idx]).strip().lower() if method_idx != -1 and row[method_idx] is not None else "cash"
+                ref_num = str(row[reference_idx]).strip() if reference_idx != -1 and row[reference_idx] is not None else ""
+                
+                Transaction.objects.create(
+                    company=company,
+                    transaction_type=tx_type,
+                    title=title,
+                    category=category,
+                    account=account,
+                    party=party,
+                    amount=amount,
+                    date=tx_date,
+                    payment_method=method,
+                    reference_number=ref_num
+                )
+                count += 1
+                
+        return Response({"detail": f"Successfully imported {count} transactions."})
+    except Exception as e:
+        return Response({"detail": f"Error parsing Excel: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+def import_sales_view(request):
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    if not company:
+        return Response({"detail": "User has no associated company."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    file = request.FILES.get("file")
+    if not file:
+        return Response({"detail": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        from openpyxl import load_workbook
+        from datetime import datetime
+        
+        wb = load_workbook(file, read_only=True)
+        ws = wb.active
+        
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return Response({"detail": "Empty Excel sheet."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        header = [str(x).strip().lower() for x in rows[0] if x is not None]
+        if "stock item" not in header or "quantity" not in header or "account" not in header:
+            return Response({"detail": "Invalid Excel file format. Header must match the exported sales statement format."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        def idx_of(name):
+            try:
+                return header.index(name)
+            except ValueError:
+                return -1
+                
+        date_idx = idx_of("date")
+        stock_idx = idx_of("stock item")
+        quantity_idx = idx_of("quantity")
+        price_idx = idx_of("sale price (rs)")
+        account_idx = idx_of("account")
+        notes_idx = idx_of("notes")
+        cust_name_idx = idx_of("customer name")
+        cust_phone_idx = idx_of("customer phone")
+        cust_addr_idx = idx_of("customer address")
+        
+        count = 0
+        from django.db import transaction as db_transaction
+        
+        with db_transaction.atomic():
+            for row in rows[1:]:
+                if not any(row):
+                    continue
+                    
+                stock_name = str(row[stock_idx]).strip() if stock_idx != -1 and row[stock_idx] is not None else "Imported Item"
+                stock, _ = Stock.objects.get_or_create(
+                    company=company,
+                    name=stock_name,
+                    defaults={"quantity": 10000, "unit_price": 0}
+                )
+                
+                qty = int(row[quantity_idx]) if quantity_idx != -1 and row[quantity_idx] is not None else 1
+                price = Decimal(str(row[price_idx] or 0))
+                
+                acc_name = str(row[account_idx]).strip() if account_idx != -1 and row[account_idx] is not None else "Cash"
+                account, _ = Account.objects.get_or_create(
+                    company=company,
+                    name=acc_name,
+                    defaults={"account_type": "cash", "opening_balance": 0}
+                )
+                
+                raw_date = row[date_idx] if date_idx != -1 else None
+                if isinstance(raw_date, datetime):
+                    sale_date = raw_date.date()
+                elif isinstance(raw_date, str):
+                    try:
+                        sale_date = datetime.strptime(raw_date.strip(), "%Y-%m-%d").date()
+                    except ValueError:
+                        sale_date = timezone.localdate()
+                else:
+                    sale_date = timezone.localdate()
+                    
+                notes = str(row[notes_idx]).strip() if notes_idx != -1 and row[notes_idx] is not None else ""
+                cust_name = str(row[cust_name_idx]).strip() if cust_name_idx != -1 and row[cust_name_idx] is not None else ""
+                cust_phone = str(row[cust_phone_idx]).strip() if cust_phone_idx != -1 and row[cust_phone_idx] is not None else ""
+                cust_addr = str(row[cust_addr_idx]).strip() if cust_addr_idx != -1 and row[cust_addr_idx] is not None else ""
+                
+                Sale.objects.create(
+                    company=company,
+                    stock=stock,
+                    quantity=qty,
+                    sale_price=price,
+                    account=account,
+                    date=sale_date,
+                    notes=notes,
+                    customer_name=cust_name,
+                    customer_phone=cust_phone,
+                    customer_address=cust_addr
+                )
+                count += 1
+                
+        return Response({"detail": f"Successfully imported {count} sales."})
+    except Exception as e:
+        return Response({"detail": f"Error parsing Excel: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
 
