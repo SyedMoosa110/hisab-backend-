@@ -720,12 +720,8 @@ def import_transactions_view(request):
                     tx_type = tx_type_str.lower()
                     title = title.strip()
                     cat_name = cat_name.strip()
-                    amount = Decimal(amt_str.replace(",", ""))
-                    
-                    try:
-                        tx_date = datetime.strptime(raw_date.strip(), "%Y-%m-%d").date()
-                    except ValueError:
-                        tx_date = timezone.localdate()
+                    amount = safe_decimal(amt_str)
+                    tx_date = safe_date(raw_date)
                         
                     category, _ = Category.objects.get_or_create(
                         company=company,
@@ -799,26 +795,18 @@ def import_transactions_view(request):
                 title = str(row[title_idx]).strip() if title_idx != -1 and row[title_idx] is not None else "Imported Transaction"
                 
                 raw_date = row[date_idx] if date_idx != -1 else None
-                if isinstance(raw_date, datetime):
-                    tx_date = raw_date.date()
-                elif isinstance(raw_date, str):
-                    try:
-                        tx_date = datetime.strptime(raw_date.strip(), "%Y-%m-%d").date()
-                    except ValueError:
-                        tx_date = timezone.localdate()
-                else:
-                    tx_date = timezone.localdate()
+                tx_date = safe_date(raw_date)
                     
                 debit_val = row[debit_idx] if debit_idx != -1 else None
                 credit_val = row[credit_idx] if credit_idx != -1 else None
                 
                 if tx_type == "expense":
-                    amount = Decimal(str(debit_val or 0))
+                    amount = safe_decimal(debit_val)
                 else:
-                    amount = Decimal(str(credit_val or 0))
+                    amount = safe_decimal(credit_val)
                     
                 if amount <= 0:
-                    amount = Decimal(str(credit_val or debit_val or 0))
+                    amount = safe_decimal(credit_val or debit_val)
                     
                 cat_name = str(row[category_idx]).strip() if category_idx != -1 and row[category_idx] is not None else "Uncategorized"
                 category, _ = Category.objects.get_or_create(
@@ -890,7 +878,7 @@ def import_sales_view(request):
                 text += page.extract_text() or ""
                 
             # Regex for PDF Sales ledger table rows
-            pattern = re.compile(r'^(\d{4}-\d{2}-\d{2})\s+(.+?)\s+(\d+)\s+(?:Rs\s*)?([\d,.]+)\s+(?:Rs\s*)?([\d,.]+)\s+(.+)$', re.MULTILINE)
+            pattern = re.compile(r'^\s*(\d{4}-\d{2}-\d{2})\s+(.+?)\s+(\d+)\s+(?:Rs\s*)?([\d,.]+)\s+(?:Rs\s*)?([\d,.]+)\s+(.+?)\s*$', re.MULTILINE)
             
             count = 0
             from django.db import transaction as db_transaction
@@ -900,14 +888,10 @@ def import_sales_view(request):
                     raw_date, stock_name, qty_str, price_str, total_str, acc_name = match.groups()
                     
                     stock_name = stock_name.strip()
-                    qty = int(qty_str)
-                    price = Decimal(price_str.replace(",", ""))
+                    qty = safe_int(qty_str)
+                    price = safe_decimal(price_str)
                     acc_name = acc_name.strip()
-                    
-                    try:
-                        sale_date = datetime.strptime(raw_date.strip(), "%Y-%m-%d").date()
-                    except ValueError:
-                        sale_date = timezone.localdate()
+                    sale_date = safe_date(raw_date)
                         
                     stock, _ = Stock.objects.get_or_create(
                         company=company,
@@ -978,8 +962,8 @@ def import_sales_view(request):
                     defaults={"quantity": 10000, "unit_price": 0}
                 )
                 
-                qty = int(row[quantity_idx]) if quantity_idx != -1 and row[quantity_idx] is not None else 1
-                price = Decimal(str(row[price_idx] or 0))
+                qty = safe_int(row[quantity_idx]) if quantity_idx != -1 else 1
+                price = safe_decimal(row[price_idx]) if price_idx != -1 else Decimal(0)
                 
                 acc_name = str(row[account_idx]).strip() if account_idx != -1 and row[account_idx] is not None else "Cash"
                 account, _ = Account.objects.get_or_create(
@@ -989,15 +973,7 @@ def import_sales_view(request):
                 )
                 
                 raw_date = row[date_idx] if date_idx != -1 else None
-                if isinstance(raw_date, datetime):
-                    sale_date = raw_date.date()
-                elif isinstance(raw_date, str):
-                    try:
-                        sale_date = datetime.strptime(raw_date.strip(), "%Y-%m-%d").date()
-                    except ValueError:
-                        sale_date = timezone.localdate()
-                else:
-                    sale_date = timezone.localdate()
+                sale_date = safe_date(raw_date)
                     
                 notes = str(row[notes_idx]).strip() if notes_idx != -1 and row[notes_idx] is not None else ""
                 cust_name = str(row[cust_name_idx]).strip() if cust_name_idx != -1 and row[cust_name_idx] is not None else ""
@@ -1023,6 +999,43 @@ def import_sales_view(request):
         return Response({"detail": f"Error parsing file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
 
+def safe_int(val, default=0):
+    if val is None:
+        return default
+    try:
+        clean_val = str(val).replace(',', '').strip()
+        if not clean_val:
+            return default
+        return int(float(clean_val))
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_decimal(val, default=Decimal('0')):
+    if val is None:
+        return default
+    try:
+        clean_val = str(val).replace('Rs', '').replace('rs', '').replace(',', '').strip()
+        if not clean_val:
+            return default
+        return Decimal(clean_val)
+    except (ValueError, TypeError, ArithmeticError):
+        return default
+
+
+def safe_date(raw_date):
+    from datetime import datetime, date
+    if isinstance(raw_date, (datetime, date)):
+        return raw_date.date() if isinstance(raw_date, datetime) else raw_date
+    if isinstance(raw_date, str):
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(raw_date.strip(), fmt).date()
+            except ValueError:
+                continue
+    return timezone.localdate()
+
+
 @api_view(["GET"])
 def export_stock_excel_view(request):
     company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
@@ -1037,13 +1050,15 @@ def export_stock_excel_view(request):
     ws.append(["Item Name", "Unit Price (Rs)", "Total Stock", "Sold Stock", "Remaining Stock", "Value (Remaining)"])
     
     for item in stock_qs:
+        rem_stock = item.remaining_stock if item.remaining_stock is not None else 0
+        price = item.unit_price if item.unit_price is not None else Decimal(0)
         ws.append([
             item.name,
-            item.unit_price,
+            price,
             item.quantity,
-            item.sold_stock,
-            item.remaining_stock,
-            item.remaining_stock * item.unit_price
+            item.sold_stock or 0,
+            rem_stock,
+            rem_stock * price
         ])
         
     response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -1126,18 +1141,20 @@ def export_stock_pdf_view(request):
     
     total_val = Decimal(0)
     for item in stock_qs:
-        val = item.remaining_stock * item.unit_price
+        rem_stock = item.remaining_stock if item.remaining_stock is not None else 0
+        price = item.unit_price if item.unit_price is not None else Decimal(0)
+        val = rem_stock * price
         total_val += val
         table_data.append([
             Paragraph(item.name, cell_style),
-            Paragraph(f"Rs {item.unit_price:,.0f}", cell_style),
-            Paragraph(str(item.quantity), cell_style),
-            Paragraph(str(item.sold_stock), cell_style),
-            Paragraph(str(item.remaining_stock), cell_style),
+            Paragraph(f"Rs {price:,.0f}", cell_style),
+            Paragraph(str(item.quantity or 0), cell_style),
+            Paragraph(str(item.sold_stock or 0), cell_style),
+            Paragraph(str(rem_stock), cell_style),
             Paragraph(f"Rs {val:,.0f}", cell_style)
         ])
         
-    col_widths = [140, 90, 70, 70, 70, 100]
+    col_widths = [135, 80, 65, 65, 70, 100]
     stock_table = Table(table_data, colWidths=col_widths, repeatRows=1)
     
     t_style = TableStyle([
@@ -1200,14 +1217,14 @@ def import_stock_view(request):
             for page in reader.pages:
                 text += page.extract_text() or ""
                 
-            pattern = re.compile(r'^(.+?)\s+(?:Rs\s*)?([\d,.]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(?:Rs\s*)?([\d,.]+)$', re.MULTILINE)
+            pattern = re.compile(r'^\s*(.+?)\s+(?:Rs\s*)?([\d,.]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(?:Rs\s*)?([\d,.]+)\s*$', re.MULTILINE)
             
             with db_transaction.atomic():
                 for match in pattern.finditer(text):
                     name, price_str, total_str, sold_str, rem_str, val_str = match.groups()
                     name = name.strip()
-                    price = Decimal(price_str.replace(",", ""))
-                    total = int(total_str)
+                    price = safe_decimal(price_str)
+                    total = safe_int(total_str)
                     
                     stock, created = Stock.objects.get_or_create(
                         company=company,
@@ -1254,8 +1271,8 @@ def import_stock_view(request):
                 if not name:
                     continue
                     
-                total = int(row[total_idx]) if total_idx != -1 and row[total_idx] is not None else 0
-                price = Decimal(str(row[price_idx] or 0))
+                total = safe_int(row[total_idx])
+                price = safe_decimal(row[price_idx])
                 
                 stock, created = Stock.objects.get_or_create(
                     company=company,
