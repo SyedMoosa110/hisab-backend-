@@ -29,8 +29,11 @@ urlpatterns = [
     path("export/pdf/", views.export_pdf_view),
     path("export-sales/excel/", views.export_sales_excel_view),
     path("export-sales/pdf/", views.export_sales_pdf_view),
+    path("export-stock/excel/", views.export_stock_excel_view),
+    path("export-stock/pdf/", views.export_stock_pdf_view),
     path("import/transactions/", views.import_transactions_view),
     path("import/sales/", views.import_sales_view),
+    path("import/stock/", views.import_stock_view),
     path("backup/create/", views.create_backup_view),
 ]
 

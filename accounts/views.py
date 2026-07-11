@@ -1023,3 +1023,253 @@ def import_sales_view(request):
         return Response({"detail": f"Error parsing file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@api_view(["GET"])
+def export_stock_excel_view(request):
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    stock_qs = Stock.objects.filter(company=company).annotate(
+        sold_stock=Coalesce(Sum("sales__quantity"), Value(0)),
+        remaining_stock=F("quantity") - Coalesce(Sum("sales__quantity"), Value(0))
+    ).order_by("name")
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Stock Inventory"
+    ws.append(["Item Name", "Unit Price (Rs)", "Total Stock", "Sold Stock", "Remaining Stock", "Value (Remaining)"])
+    
+    for item in stock_qs:
+        ws.append([
+            item.name,
+            item.unit_price,
+            item.quantity,
+            item.sold_stock,
+            item.remaining_stock,
+            item.remaining_stock * item.unit_price
+        ])
+        
+    response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    response["Content-Disposition"] = 'attachment; filename="stock-inventory.xlsx"'
+    wb.save(response)
+    return response
+
+
+@api_view(["GET"])
+def export_stock_pdf_view(request):
+    response = HttpResponse(content_type="application/pdf")
+    response["Content-Disposition"] = 'attachment; filename="stock-inventory.pdf"'
+    
+    doc = SimpleDocTemplate(
+        response,
+        pagesize=A4,
+        rightMargin=40,
+        leftMargin=40,
+        topMargin=40,
+        bottomMargin=40
+    )
+    
+    story = []
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Heading1'],
+        fontName='Helvetica-Bold',
+        fontSize=20,
+        textColor=colors.HexColor('#0f766e'),
+        spaceAfter=4
+    )
+    
+    subtitle_style = ParagraphStyle(
+        'DocSubtitle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=9,
+        textColor=colors.HexColor('#64748b'),
+        spaceAfter=15
+    )
+    
+    cell_style = ParagraphStyle(
+        'CellText',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=9,
+        textColor=colors.HexColor('#1e293b')
+    )
+
+    cell_header_style = ParagraphStyle(
+        'CellHeader',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=9,
+        textColor=colors.white
+    )
+
+    story.append(Paragraph("LedgerPro", title_style))
+    story.append(Paragraph("Stock Inventory Statement - Generated on " + timezone.now().strftime("%Y-%m-%d %H:%M"), subtitle_style))
+    story.append(Spacer(1, 10))
+    
+    headers = [
+        Paragraph("Item Name", cell_header_style),
+        Paragraph("Unit Price (Rs)", cell_header_style),
+        Paragraph("Total Stock", cell_header_style),
+        Paragraph("Sold Stock", cell_header_style),
+        Paragraph("Remaining Stock", cell_header_style),
+        Paragraph("Value (Remaining)", cell_header_style)
+    ]
+    
+    table_data = [headers]
+    
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    stock_qs = Stock.objects.filter(company=company).annotate(
+        sold_stock=Coalesce(Sum("sales__quantity"), Value(0)),
+        remaining_stock=F("quantity") - Coalesce(Sum("sales__quantity"), Value(0))
+    ).order_by("name")
+    
+    total_val = Decimal(0)
+    for item in stock_qs:
+        val = item.remaining_stock * item.unit_price
+        total_val += val
+        table_data.append([
+            Paragraph(item.name, cell_style),
+            Paragraph(f"Rs {item.unit_price:,.0f}", cell_style),
+            Paragraph(str(item.quantity), cell_style),
+            Paragraph(str(item.sold_stock), cell_style),
+            Paragraph(str(item.remaining_stock), cell_style),
+            Paragraph(f"Rs {val:,.0f}", cell_style)
+        ])
+        
+    col_widths = [140, 90, 70, 70, 70, 100]
+    stock_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    
+    t_style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0f766e')),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cbd5e1')),
+    ])
+    
+    for i in range(1, len(table_data)):
+        bg_color = colors.HexColor('#f8fafc') if i % 2 == 0 else colors.white
+        t_style.add('BACKGROUND', (0, i), (-1, i), bg_color)
+        
+    stock_table.setStyle(t_style)
+    story.append(stock_table)
+    story.append(Spacer(1, 15))
+    
+    summary_data = [
+        [Paragraph("<strong>Total Inventory Value:</strong>", cell_style), Paragraph(f"<strong>Rs {total_val:,.0f}</strong>", cell_style)]
+    ]
+    summary_table = Table(summary_data, colWidths=[150, 150])
+    summary_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LINEBELOW', (0, 0), (-1, -1), 1.5, colors.HexColor('#0f766e')),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    
+    story.append(summary_table)
+    doc.build(story)
+    return response
+
+
+@api_view(["POST"])
+def import_stock_view(request):
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    if not company:
+        return Response({"detail": "User has no associated company."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    file = request.FILES.get("file")
+    if not file:
+        return Response({"detail": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        count = 0
+        from django.db import transaction as db_transaction
+        
+        # Support PDF Import
+        if file.name.lower().endswith(".pdf"):
+            from pypdf import PdfReader
+            import re
+            
+            reader = PdfReader(file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
+                
+            pattern = re.compile(r'^(.+?)\s+(?:Rs\s*)?([\d,.]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(?:Rs\s*)?([\d,.]+)$', re.MULTILINE)
+            
+            with db_transaction.atomic():
+                for match in pattern.finditer(text):
+                    name, price_str, total_str, sold_str, rem_str, val_str = match.groups()
+                    name = name.strip()
+                    price = Decimal(price_str.replace(",", ""))
+                    total = int(total_str)
+                    
+                    stock, created = Stock.objects.get_or_create(
+                        company=company,
+                        name=name,
+                        defaults={"quantity": total, "unit_price": price}
+                    )
+                    if not created:
+                        stock.quantity = total
+                        stock.unit_price = price
+                        stock.save()
+                    count += 1
+                    
+            return Response({"detail": f"Successfully imported/updated {count} stock items from PDF."})
+            
+        # Default Excel Import
+        from openpyxl import load_workbook
+        wb = load_workbook(file, read_only=True)
+        ws = wb.active
+        
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return Response({"detail": "Empty Excel sheet."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        header = [str(x).strip().lower() for x in rows[0] if x is not None]
+        if "item name" not in header or "total stock" not in header or "unit price (rs)" not in header:
+            return Response({"detail": "Invalid Excel file format. Header must match the exported stock inventory format."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        def idx_of(name):
+            try:
+                return header.index(name)
+            except ValueError:
+                return -1
+                
+        name_idx = idx_of("item name")
+        total_idx = idx_of("total stock")
+        price_idx = idx_of("unit price (rs)")
+        
+        with db_transaction.atomic():
+            for row in rows[1:]:
+                if not any(row):
+                    continue
+                    
+                name = str(row[name_idx]).strip() if name_idx != -1 and row[name_idx] is not None else ""
+                if not name:
+                    continue
+                    
+                total = int(row[total_idx]) if total_idx != -1 and row[total_idx] is not None else 0
+                price = Decimal(str(row[price_idx] or 0))
+                
+                stock, created = Stock.objects.get_or_create(
+                    company=company,
+                    name=name,
+                    defaults={"quantity": total, "unit_price": price}
+                )
+                if not created:
+                    stock.quantity = total
+                    stock.unit_price = price
+                    stock.save()
+                count += 1
+                
+        return Response({"detail": f"Successfully imported/updated {count} stock items."})
+    except Exception as e:
+        return Response({"detail": f"Error parsing file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
