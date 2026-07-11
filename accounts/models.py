@@ -141,14 +141,6 @@ class Note(TimeStampedModel):
         return self.title
 
 
-class BackupRecord(TimeStampedModel):
-    BACKUP_TYPES = [("manual", "Manual"), ("daily", "Daily"), ("weekly", "Weekly")]
-    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="backups", null=True, blank=True)
-
-    backup_type = models.CharField(max_length=20, choices=BACKUP_TYPES, default="manual")
-    file = models.FileField(upload_to="backups/")
-    notes = models.CharField(max_length=200, blank=True)
-
 
 class AuditLog(TimeStampedModel):
     ACTIONS = [("created", "Created"), ("updated", "Updated"), ("deleted", "Deleted")]

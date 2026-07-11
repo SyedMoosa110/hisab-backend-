@@ -23,10 +23,9 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 
-from .models import Account, BackupRecord, Category, Company, DuePayment, Note, Party, Transaction, Stock, Sale, UserProfile
+from .models import Account, Category, Company, DuePayment, Note, Party, Transaction, Stock, Sale, UserProfile
 from .serializers import (
     AccountSerializer,
-    BackupRecordSerializer,
     CategorySerializer,
     DuePaymentSerializer,
     NoteSerializer,
@@ -171,16 +170,6 @@ class NoteViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
         serializer.save(company=company)
-
-
-class BackupRecordViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = BackupRecordSerializer
-    queryset = BackupRecord.objects.all()
-    permission_classes = [IsAdminUser]
-
-    def get_queryset(self):
-        company = self.request.user.profile.company if self.request.user.is_authenticated and hasattr(self.request.user, 'profile') else None
-        return BackupRecord.objects.filter(company=company)
 
 
 @api_view(["GET"])
@@ -486,24 +475,6 @@ def export_pdf_view(request):
             pdf.setFont("Helvetica", 9)
     pdf.save()
     return response
-
-
-@api_view(["POST"])
-@permission_classes([IsAdminUser])
-def create_backup_view(request):
-    backups_dir = settings.MEDIA_ROOT / "backups"
-    backups_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"backup-{timezone.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
-    target = backups_dir / filename
-    shutil.copyfile(settings.DATABASES["default"]["NAME"], target)
-    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
-    record = BackupRecord.objects.create(
-        company=company,
-        backup_type=request.data.get("backup_type", "manual"),
-        file=f"backups/{filename}",
-        notes=request.data.get("notes", ""),
-    )
-    return Response(BackupRecordSerializer(record).data)
 
 
 class StockViewSet(viewsets.ModelViewSet):

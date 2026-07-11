@@ -3,7 +3,7 @@ from pathlib import Path
 from django.db.models import Sum
 from rest_framework import serializers
 
-from .models import Account, BackupRecord, Category, DuePayment, Note, Party, Transaction, Stock, Sale
+from .models import Account, Category, DuePayment, Note, Party, Transaction, Stock, Sale
 
 
 class AccountSerializer(serializers.ModelSerializer):
@@ -65,13 +65,6 @@ class DuePaymentSerializer(serializers.ModelSerializer):
 class NoteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Note
-        fields = "__all__"
-        read_only_fields = ["company"]
-
-
-class BackupRecordSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = BackupRecord
         fields = "__all__"
         read_only_fields = ["company"]
 

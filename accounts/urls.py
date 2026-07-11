@@ -10,7 +10,6 @@ router.register("parties", views.PartyViewSet)
 router.register("transactions", views.TransactionViewSet)
 router.register("dues", views.DuePaymentViewSet)
 router.register("notes", views.NoteViewSet)
-router.register("backups", views.BackupRecordViewSet, basename="backups")
 router.register("stock", views.StockViewSet)
 router.register("sales", views.SaleViewSet)
 
@@ -34,6 +33,5 @@ urlpatterns = [
     path("import/transactions/", views.import_transactions_view),
     path("import/sales/", views.import_sales_view),
     path("import/stock/", views.import_stock_view),
-    path("backup/create/", views.create_backup_view),
 ]
 
