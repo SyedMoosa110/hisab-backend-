@@ -604,7 +604,7 @@ def export_sales_pdf_view(request):
         textColor=colors.white
     )
 
-    story.append(Paragraph("HisabPro", title_style))
+    story.append(Paragraph("LedgerPro", title_style))
     story.append(Paragraph("Sales Ledger Statement - Generated on " + timezone.now().strftime("%Y-%m-%d %H:%M"), subtitle_style))
     story.append(Spacer(1, 10))
     
