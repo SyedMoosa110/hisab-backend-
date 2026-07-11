@@ -184,6 +184,9 @@ class Sale(TimeStampedModel):
     account = models.ForeignKey(Account, on_delete=models.PROTECT, related_name="sales")
     transaction = models.ForeignKey(Transaction, on_delete=models.SET_NULL, null=True, blank=True, related_name="sales")
     notes = models.TextField(blank=True)
+    customer_name = models.CharField(max_length=255, blank=True, null=True)
+    customer_phone = models.CharField(max_length=50, blank=True, null=True)
+    customer_address = models.TextField(blank=True, null=True)
 
     def save(self, *args, **kwargs):
         self.total_price = Decimal(self.quantity) * Decimal(self.sale_price)
