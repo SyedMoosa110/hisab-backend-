@@ -235,13 +235,10 @@ def register_view(request):
                 role='admin'
             )
 
-        login(request, user)
         return Response({
+            "detail": "Account created successfully! Please login.",
             "username": user.username,
-            "owner_name": owner_name,
-            "is_staff": user.is_staff,
-            "company_name": company.name,
-            "role": "admin"
+            "company_name": company.name
         })
     except Exception as e:
         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -250,7 +247,20 @@ def register_view(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def login_view(request):
-    user = authenticate(username=request.data.get("username"), password=request.data.get("password"))
+    username_or_business = request.data.get("username")
+    password = request.data.get("password")
+
+    user = authenticate(username=username_or_business, password=password)
+
+    if not user and username_or_business:
+        # Try to find a user by their associated business name or company name
+        profile = UserProfile.objects.filter(company__name__iexact=username_or_business).first()
+        if not profile:
+            profile = UserProfile.objects.filter(business_name__iexact=username_or_business).first()
+        
+        if profile:
+            user = authenticate(username=profile.user.username, password=password)
+
     if not user or not user.is_staff:
         return Response({"detail": "Invalid credentials."}, status=status.HTTP_400_BAD_REQUEST)
     login(request, user)
@@ -273,6 +283,7 @@ def login_view(request):
         "company_name": company_name,
         "role": role
     })
+
 
 
 class CsrfExemptSessionAuthentication(SessionAuthentication):
