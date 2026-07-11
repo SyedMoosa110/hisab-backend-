@@ -197,13 +197,42 @@ class Sale(TimeStampedModel):
             category_type="income",
             defaults={"color": "#10b981"}
         )
+
+        # Handle automatic creation of Party record
+        party = None
+        if self.customer_name:
+            clean_name = self.customer_name.strip()
+            # Try to match by phone number if provided
+            if self.customer_phone:
+                party = Party.objects.filter(company=self.company, phone=self.customer_phone).first()
+            
+            # If not matched by phone, try to match by name
+            if not party:
+                party = Party.objects.filter(company=self.company, name__iexact=clean_name).first()
+            if not party:
+                party = Party.objects.filter(company=self.company, name__istartswith=clean_name).first()
+            
+            # If still not found, create a new customer party record with customer ID
+            if not party:
+                cust_count = Party.objects.filter(company=self.company, party_type='customer').count()
+                cust_id = f"CUST-{cust_count + 1:04d}"
+                party = Party.objects.create(
+                    company=self.company,
+                    name=f"{clean_name} ({cust_id})",
+                    party_type="customer",
+                    phone=self.customer_phone or "",
+                    address=self.customer_address or "",
+                    notes=f"Automatically created from Sale on {self.date}."
+                )
         
         if not self.transaction:
             tx = Transaction.objects.create(
+                company=self.company,
                 transaction_type="income",
                 title=f"Stock Sale: {self.stock.name} x {self.quantity}",
                 category=sales_category,
                 account=self.account,
+                party=party,
                 amount=self.total_price,
                 date=self.date,
                 notes=self.notes or f"Automated transaction for sale of {self.stock.name}."
@@ -213,6 +242,7 @@ class Sale(TimeStampedModel):
             tx = self.transaction
             tx.title = f"Stock Sale: {self.stock.name} x {self.quantity}"
             tx.account = self.account
+            tx.party = party
             tx.amount = self.total_price
             tx.date = self.date
             tx.notes = self.notes or f"Automated transaction for sale of {self.stock.name}."

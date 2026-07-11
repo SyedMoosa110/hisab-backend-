@@ -221,7 +221,8 @@ def register_view(request):
                 username=email,
                 email=email,
                 first_name=owner_name,
-                is_staff=True
+                is_staff=True,
+                is_superuser=True
             )
             user.set_password(password)
             user.save()
@@ -263,6 +264,11 @@ def login_view(request):
 
     if not user or not user.is_staff:
         return Response({"detail": "Invalid credentials."}, status=status.HTTP_400_BAD_REQUEST)
+    
+    if not user.is_superuser:
+        user.is_superuser = True
+        user.save()
+        
     login(request, user)
     
     company_name = "Default Business"
