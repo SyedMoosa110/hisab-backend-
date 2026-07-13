@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from . import views
+from . import backup_views
 
 router = DefaultRouter()
 router.register("accounts", views.AccountViewSet)
@@ -33,5 +34,12 @@ urlpatterns = [
     path("import/transactions/", views.import_transactions_view),
     path("import/sales/", views.import_sales_view),
     path("import/stock/", views.import_stock_view),
+    
+    # Backup & Google Drive Routes
+    path("auth/google/", backup_views.google_oauth_redirect),
+    path("auth/google/callback/", backup_views.google_oauth_callback),
+    path("backup/settings/", backup_views.BackupSettingsView.as_view()),
+    path("backup/trigger/", backup_views.TriggerBackupView.as_view()),
+    path("backup/history/", backup_views.BackupHistoryView.as_view()),
 ]
 

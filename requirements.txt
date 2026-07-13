@@ -6,3 +6,7 @@ reportlab
 psycopg2-binary
 whitenoise
 pypdf
+google-auth
+google-auth-oauthlib
+google-api-python-client
+requests

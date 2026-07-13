@@ -263,3 +263,32 @@ class UserProfile(TimeStampedModel):
     def __str__(self):
         return f"{self.user.username} - {self.company.name if self.company else 'No Company'} ({self.role})"
 
+
+class GoogleDriveToken(TimeStampedModel):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='gdrive_token')
+    access_token = models.TextField()
+    refresh_token = models.TextField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    backup_enabled = models.BooleanField(default=False)
+    last_backup_at = models.DateTimeField(null=True, blank=True)
+    backup_folder_id = models.CharField(max_length=255, null=True, blank=True)
+
+    def __str__(self):
+        return f"Google Drive Token for {self.user.email}"
+
+
+class BackupRecord(TimeStampedModel):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('success', 'Success'),
+        ('failed', 'Failed')
+    ]
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='backup_records')
+    file_name = models.CharField(max_length=255)
+    drive_file_id = models.CharField(max_length=255, blank=True, null=True)
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='pending')
+    error_message = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return f"Backup {self.file_name} - {self.status}"
+
