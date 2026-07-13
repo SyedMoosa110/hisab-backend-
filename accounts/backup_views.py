@@ -37,7 +37,8 @@ def google_oauth_redirect(request):
         "scope": "https://www.googleapis.com/auth/drive.file email openid",
         "access_type": "offline",
         "prompt": "consent",
-        "state": str(request.user.id)
+        "state": str(request.user.id),
+        "login_hint": request.user.email
     }
     
     url = f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
@@ -162,3 +163,24 @@ class BackupHistoryView(APIView):
         records = BackupRecord.objects.filter(user=request.user).order_by('-created_at')[:20]
         serializer = BackupRecordSerializer(records, many=True)
         return Response(serializer.data)
+
+
+class BackupCronTriggerView(APIView):
+    permission_classes = []  # Public endpoint so scheduler can trigger it
+
+    def get(self, request):
+        cron_secret = getattr(settings, "CRON_SECRET", "")
+        provided_secret = request.GET.get("secret")
+        
+        if cron_secret and provided_secret != cron_secret:
+            return Response({"detail": "Unauthorized"}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        from .backup_cron import run_all_automated_backups
+        try:
+            summary = run_all_automated_backups()
+            return Response({
+                "detail": "Automated daily backups executed successfully.",
+                "summary": summary
+            })
+        except Exception as e:
+            return Response({"detail": f"Cron backup failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

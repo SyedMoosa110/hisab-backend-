@@ -20,6 +20,7 @@ def run_all_automated_backups():
     tokens = GoogleDriveToken.objects.filter(backup_enabled=True)
     success_count = 0
     fail_count = 0
+    results = []
 
     print(f"[{timezone.now()}] Starting automated daily backup for {tokens.count()} users...")
     
@@ -28,11 +29,18 @@ def run_all_automated_backups():
             print(f"Running backup for user: {token.user.email}")
             run_backup_for_user(token.user)
             success_count += 1
+            results.append({"email": token.user.email, "status": "success"})
         except Exception as e:
             print(f"Failed backup for user {token.user.email}: {str(e)}")
             fail_count += 1
+            results.append({"email": token.user.email, "status": "failed", "error": str(e)})
 
     print(f"[{timezone.now()}] Automated backups finished. Success: {success_count}, Failed: {fail_count}")
+    return {
+        "success_count": success_count,
+        "fail_count": fail_count,
+        "results": results
+    }
 
 if __name__ == "__main__":
     run_all_automated_backups()

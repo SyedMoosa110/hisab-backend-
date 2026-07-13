@@ -41,5 +41,6 @@ urlpatterns = [
     path("backup/settings/", backup_views.BackupSettingsView.as_view()),
     path("backup/trigger/", backup_views.TriggerBackupView.as_view()),
     path("backup/history/", backup_views.BackupHistoryView.as_view()),
+    path("backup/cron/", backup_views.BackupCronTriggerView.as_view()),
 ]
 
