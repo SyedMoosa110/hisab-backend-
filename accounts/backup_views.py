@@ -119,7 +119,7 @@ class BackupSettingsView(APIView):
             token = GoogleDriveToken.objects.get(user=request.user)
             serializer = GoogleDriveTokenSerializer(token)
             data = serializer.data
-            data['is_authenticated'] = True
+            data['is_authenticated'] = bool(token.refresh_token)
             data['email'] = request.user.email
             return Response(data)
         except GoogleDriveToken.DoesNotExist:

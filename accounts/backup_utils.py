@@ -34,7 +34,7 @@ def get_active_access_token(token_model):
         
     return token_model.access_token
 
-def backup_database_to_json(user):
+def backup_database_to_json(user, timestamp=None):
     """
     Creates a temporary JSON dump of database tables belonging to the user's company/data.
     """
@@ -64,17 +64,19 @@ def backup_database_to_json(user):
             return float(obj)
         raise TypeError(f"Type {type(obj)} not serializable")
 
-    temp_dir = os.path.join(settings.BASE_DIR, 'tmp_backups')
+    import tempfile
+    temp_dir = os.path.join(tempfile.gettempdir(), 'ledgerpro_backups')
     os.makedirs(temp_dir, exist_ok=True)
     
-    timestamp = timezone.now().strftime('%Y-%m-%d-%H%M%S')
+    if not timestamp:
+        timestamp = timezone.now().strftime('%Y-%m-%d-%H%M%S')
     json_filename = f"backup-{user.id}-{timestamp}.json"
     json_path = os.path.join(temp_dir, json_filename)
     
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, default=default_serializer, indent=2)
 
-    zip_filename = f"backup-{timezone.now().strftime('%Y-%m-%d')}.zip"
+    zip_filename = f"backup-{user.id}-{timestamp}.zip"
     zip_path = os.path.join(temp_dir, zip_filename)
     
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -82,8 +84,13 @@ def backup_database_to_json(user):
         
         # Include media files associated with the user's transactions if any
         for tx in Transaction.objects.filter(company=company, attachment__isnull=False):
-            if tx.attachment and os.path.exists(tx.attachment.path):
-                zipf.write(tx.attachment.path, arcname=f"media/{os.path.basename(tx.attachment.name)}")
+            try:
+                if tx.attachment and tx.attachment.name:
+                    file_path = tx.attachment.path
+                    if os.path.exists(file_path):
+                        zipf.write(file_path, arcname=f"media/{os.path.basename(tx.attachment.name)}")
+            except Exception:
+                pass
                 
     try:
         os.remove(json_path)
@@ -139,14 +146,23 @@ def upload_backup_to_drive(user, file_path):
         token_model.save()
 
     # Upload backup zip using Google Drive Multipart Upload protocol
+    base_name = os.path.basename(file_path)
+    # base_name looks like: backup-{user_id}-{timestamp}.zip
+    # Let's convert it to backup-{timestamp}.zip for Google Drive
+    parts = base_name.split('-')
+    if len(parts) >= 3:
+        drive_name = f"backup-{'-'.join(parts[2:])}"
+    else:
+        drive_name = base_name
+
     file_metadata = {
-        "name": os.path.basename(file_path),
+        "name": drive_name,
         "parents": [folder_id]
     }
     
     files = {
         "data": ("metadata", json.dumps(file_metadata), "application/json; charset=UTF-8"),
-        "file": (os.path.basename(file_path), open(file_path, "rb"), "application/zip")
+        "file": (drive_name, open(file_path, "rb"), "application/zip")
     }
 
     upload_res = requests.post(
@@ -175,7 +191,8 @@ def run_backup_for_user(user):
     """
     from accounts.models import BackupRecord
     
-    file_name = f"backup-{timezone.now().strftime('%Y-%m-%d')}.zip"
+    timestamp = timezone.now().strftime('%Y-%m-%d-%H%M%S')
+    file_name = f"backup-{timestamp}.zip"
     record = BackupRecord.objects.create(
         user=user,
         file_name=file_name,
@@ -184,7 +201,7 @@ def run_backup_for_user(user):
     
     file_path = None
     try:
-        file_path = backup_database_to_json(user)
+        file_path = backup_database_to_json(user, timestamp=timestamp)
         if not file_path:
             raise Exception("No company/data found for user profile.")
             
