@@ -5,34 +5,38 @@ import requests
 from datetime import datetime
 from django.conf import settings
 from django.utils import timezone
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from django.db import connection
 
-def get_google_credentials(token_model):
+def get_active_access_token(token_model):
     """
-    Constructs google.oauth2.credentials.Credentials from the GoogleDriveToken model.
+    Refreshes the Google OAuth 2.0 access token using requests if it has expired.
     """
-    creds = Credentials(
-        token=token_model.access_token,
-        refresh_token=token_model.refresh_token,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=getattr(settings, "GOOGLE_OAUTH_CLIENT_ID", ""),
-        client_secret=getattr(settings, "GOOGLE_OAUTH_CLIENT_SECRET", "")
-    )
-    if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        token_model.access_token = creds.token
-        token_model.expires_at = timezone.now() + timezone.timedelta(seconds=creds.expiry - timezone.now().timestamp() if creds.expiry else 3600)
+    now = timezone.now()
+    # If token is expired or expires in the next 60 seconds, refresh it
+    if token_model.expires_at <= now + timezone.timedelta(seconds=60):
+        if not token_model.refresh_token:
+            raise Exception("No refresh token stored. Please re-authenticate.")
+            
+        payload = {
+            "client_id": getattr(settings, "GOOGLE_OAUTH_CLIENT_ID", ""),
+            "client_secret": getattr(settings, "GOOGLE_OAUTH_CLIENT_SECRET", ""),
+            "refresh_token": token_model.refresh_token,
+            "grant_type": "refresh_token"
+        }
+        res = requests.post("https://oauth2.googleapis.com/token", data=payload)
+        if res.status_code != 200:
+            raise Exception(f"Failed to refresh access token: {res.text}")
+            
+        data = res.json()
+        token_model.access_token = data.get("access_token")
+        expires_in = data.get("expires_in", 3600)
+        token_model.expires_at = now + timezone.timedelta(seconds=expires_in)
         token_model.save()
-    return creds
+        
+    return token_model.access_token
 
 def backup_database_to_json(user):
     """
     Creates a temporary JSON dump of database tables belonging to the user's company/data.
-    Since we are using Neon PostgreSQL, we dump core records for the user's company.
     """
     from accounts.models import Account, Category, Party, Transaction, Stock, Sale, DuePayment, Note
     company = getattr(user.profile, 'company', None)
@@ -90,51 +94,80 @@ def backup_database_to_json(user):
 
 def upload_backup_to_drive(user, file_path):
     """
-    Uploads a backup zip file directly to Google Drive in the user's specific folder.
+    Uploads a backup zip file directly to Google Drive using HTTP multipart requests.
     """
-    from accounts.models import GoogleDriveToken, BackupRecord
+    from accounts.models import GoogleDriveToken
     try:
         token_model = GoogleDriveToken.objects.get(user=user)
     except GoogleDriveToken.DoesNotExist:
         raise Exception("Google Drive is not authenticated for this user.")
 
-    creds = get_google_credentials(token_model)
-    service = build('drive', 'v3', credentials=creds)
+    access_token = get_active_access_token(token_model)
+    headers = {"Authorization": f"Bearer {access_token}"}
 
     # Ensure backup folder exists
     folder_id = token_model.backup_folder_id
     if not folder_id:
-        # Check if folder exists on Drive first
+        # Search for folder named 'LedgerPro-Backups'
         query = "name = 'LedgerPro-Backups' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        results = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
-        items = results.get('files', [])
+        res = requests.get(
+            f"https://www.googleapis.com/drive/v3/files?q={query}",
+            headers=headers
+        )
+        if res.status_code != 200:
+            raise Exception(f"Failed to query Google Drive folder: {res.text}")
+            
+        items = res.json().get("files", [])
         if items:
-            folder_id = items[0]['id']
+            folder_id = items[0]["id"]
         else:
             # Create folder
             folder_metadata = {
-                'name': 'LedgerPro-Backups',
-                'mimeType': 'application/vnd.google-apps.folder'
+                "name": "LedgerPro-Backups",
+                "mimeType": "application/vnd.google-apps.folder"
             }
-            folder = service.files().create(body=folder_metadata, fields='id').execute()
-            folder_id = folder.get('id')
-        
+            create_res = requests.post(
+                "https://www.googleapis.com/drive/v3/files",
+                headers=headers,
+                json=folder_metadata
+            )
+            if create_res.status_code != 200:
+                raise Exception(f"Failed to create Google Drive folder: {create_res.text}")
+            folder_id = create_res.json().get("id")
+            
         token_model.backup_folder_id = folder_id
         token_model.save()
 
-    # Upload backup zip
+    # Upload backup zip using Google Drive Multipart Upload protocol
     file_metadata = {
-        'name': os.path.basename(file_path),
-        'parents': [folder_id]
+        "name": os.path.basename(file_path),
+        "parents": [folder_id]
     }
-    media = MediaFileUpload(file_path, mimetype='application/zip')
-    drive_file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    
+    files = {
+        "data": ("metadata", json.dumps(file_metadata), "application/json; charset=UTF-8"),
+        "file": (os.path.basename(file_path), open(file_path, "rb"), "application/zip")
+    }
+
+    upload_res = requests.post(
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+        headers=headers,
+        files=files
+    )
+
+    # Close file handles
+    files["file"][1].close()
+
+    if upload_res.status_code not in (200, 201):
+        raise Exception(f"Failed to upload zip backup to Drive: {upload_res.text}")
+        
+    drive_file_id = upload_res.json().get("id")
     
     # Update token's last backup timestamp
     token_model.last_backup_at = timezone.now()
     token_model.save()
     
-    return drive_file.get('id')
+    return drive_file_id
 
 def run_backup_for_user(user):
     """
