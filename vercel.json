@@ -21,11 +21,5 @@
       "src": "/(.*)",
       "dest": "api/index.py"
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/backup/cron/",
-      "schedule": "0 0 * * *"
-    }
   ]
 }
