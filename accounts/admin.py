@@ -1,7 +1,12 @@
 from django.contrib import admin
 
-from .models import Account, Category, DuePayment, Note, Party, Transaction, Stock, Sale, UserProfile
+from .models import Account, Category, DuePayment, Note, Party, Transaction, Stock, Sale, UserProfile, Company
 
+@admin.register(Company)
+class CompanyAdmin(admin.ModelAdmin):
+    list_display = ("name", "is_upgraded", "created_at")
+    list_filter = ("is_upgraded",)
+    search_fields = ("name",)
 
 admin.site.register(Account)
 admin.site.register(Category)
