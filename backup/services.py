@@ -17,12 +17,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 class BackupService:
-    def __init__(self):
-        # NO side effects in the constructor.
-        # Directory creation and DB queries are moved to actual methods.
+    def __init__(self, device_id=None):
         self.device_name = os.environ.get('COMPUTERNAME', 'Unknown Device')
-        # We compute this dynamically when needed to avoid issues.
-        pass
+        self.device_id = device_id
 
     def _derive_aes_key(self, secret):
         salt = b"backup_salt_123"
@@ -35,7 +32,6 @@ class BackupService:
         return kdf.derive(secret.encode('utf-8'))
 
     def _get_temp_dir(self):
-        # Use strictly /tmp for Vercel compatibility
         temp_dir = '/tmp/backup_temp'
         os.makedirs(temp_dir, exist_ok=True)
         return temp_dir
@@ -55,19 +51,27 @@ class BackupService:
         except Exception:
             pass
 
-    def _get_drive_service(self):
-        creds_obj = GoogleDriveCredentials.objects.first()
-        if not creds_obj or not creds_obj.get_token():
-            raise ValueError("No Google Drive credentials found or incomplete.")
-        
-        creds = Credentials(
-            token=creds_obj.get_token(),
-            refresh_token=creds_obj.get_refresh_token(),
-            client_id=creds_obj.client_id,
-            client_secret=creds_obj.client_secret,
-            token_uri=creds_obj.token_uri
-        )
-        return build('drive', 'v3', credentials=creds)
+    def _get_drive_services(self):
+        if self.device_id:
+            creds_qs = GoogleDriveCredentials.objects.filter(device_id=self.device_id)
+        else:
+            creds_qs = GoogleDriveCredentials.objects.all()
+            
+        services = []
+        for creds_obj in creds_qs:
+            if creds_obj.get_token():
+                creds = Credentials(
+                    token=creds_obj.get_token(),
+                    refresh_token=creds_obj.get_refresh_token(),
+                    client_id=creds_obj.client_id,
+                    client_secret=creds_obj.client_secret,
+                    token_uri=creds_obj.token_uri
+                )
+                services.append(build('drive', 'v3', credentials=creds))
+                
+        if not services:
+            raise ValueError("No valid Google Drive credentials found.")
+        return services
 
     def run_backup(self):
         state, _ = BackupState.objects.get_or_create(id=1)
@@ -99,24 +103,26 @@ class BackupService:
             
             # 5. Upload
             self._log("Uploading to Google Drive...")
-            service = self._get_drive_service()
-            folder_id = self._get_or_create_folder(service, 'Business Accounting Backup')
-            history_folder_id = self._get_or_create_folder(service, 'history', parent_id=folder_id)
-
-            filename = f"{datetime.now().strftime('%Y-%m-%d-%H%M')}.enc"
+            services = self._get_drive_services()
             
-            # Upload to history
-            file_id = self._upload_file(service, encrypted_path, filename, history_folder_id)
-            
-            # Update latest.enc
-            self._upload_file(service, encrypted_path, 'latest.enc', folder_id, overwrite=True)
+            for service in services:
+                folder_id = self._get_or_create_folder(service, 'Business Accounting Backup')
+                history_folder_id = self._get_or_create_folder(service, 'history', parent_id=folder_id)
 
-            # 6. Metadata
-            self._log("Updating Metadata...")
-            self.update_metadata(service, folder_id, checksum, file_size, temp_dir)
+                filename = f"{datetime.now().strftime('%Y-%m-%d-%H%M')}.enc"
+                
+                # Upload to history
+                self._upload_file(service, encrypted_path, filename, history_folder_id)
+                
+                # Update latest.enc
+                self._upload_file(service, encrypted_path, 'latest.enc', folder_id, overwrite=True)
 
-            # 7. Cleanup
-            self.maintain_history(service, history_folder_id)
+                # 6. Metadata
+                self._log("Updating Metadata...")
+                self.update_metadata(service, folder_id, checksum, file_size, temp_dir)
+
+                # 7. Cleanup
+                self.maintain_history(service, history_folder_id)
 
             self._log("Backup Successful", level="SUCCESS")
             state.status = 'IDLE'
@@ -156,17 +162,16 @@ class BackupService:
             bck.close()
             con.close()
         elif 'postgresql' in engine:
-            os.environ['PGPASSWORD'] = db_settings['PASSWORD']
-            cmd = [
-                'pg_dump',
-                '-h', db_settings.get('HOST', 'localhost'),
-                '-p', str(db_settings.get('PORT', '5432')),
-                '-U', db_settings.get('USER', 'postgres'),
-                '-F', 'c', # custom format
-                '-f', snapshot_path,
-                db_settings.get('NAME', 'postgres')
-            ]
-            subprocess.run(cmd, check=True)
+            from django.core.management import call_command
+            snapshot_path = snapshot_path.replace('.db', '.json')
+            
+            with open(snapshot_path, 'w', encoding='utf-8') as f:
+                call_command(
+                    'dumpdata', 
+                    format='json', 
+                    exclude=['contenttypes', 'auth.Permission'],
+                    stdout=f
+                )
         else:
             raise Exception(f"Unsupported database engine for native backup: {engine}")
         return snapshot_path

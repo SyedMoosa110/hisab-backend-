@@ -93,6 +93,7 @@ def get_auth_url(request):
         
     auth_url, state = flow.authorization_url(prompt='consent', access_type='offline')
     request.session['oauth_state'] = state
+    request.session['device_id'] = request.headers.get('X-Device-Id', 'default-device')
     
     if hasattr(flow, 'code_verifier'):
         request.session['code_verifier'] = flow.code_verifier
@@ -171,7 +172,8 @@ def auth_callback(request):
 
         print("[OAuth DEBUG] Saving credentials...")
         # Save credentials
-        creds_obj, _ = GoogleDriveCredentials.objects.get_or_create(id=1)
+        device_id = request.session.get('device_id', 'default-device')
+        creds_obj, _ = GoogleDriveCredentials.objects.get_or_create(device_id=device_id)
         creds_obj.client_id = flow.client_config['client_id']
         creds_obj.client_secret = flow.client_config['client_secret']
         creds_obj.token_uri = flow.client_config['token_uri']
@@ -206,7 +208,8 @@ def disconnect(request):
         
         step = "db_lookup"
         print("[Disconnect] Credentials found?")
-        creds = GoogleDriveCredentials.objects.first()
+        device_id = request.headers.get('X-Device-Id', 'default-device')
+        creds = GoogleDriveCredentials.objects.filter(device_id=device_id).first()
         if not creds:
             print("[Disconnect] No credentials found.")
             return Response({
@@ -272,8 +275,9 @@ def disconnect(request):
 @permission_classes([AllowAny])
 @api_error_handler
 def get_status(request):
-    creds = GoogleDriveCredentials.objects.first()
-    settings_obj = BackupSettings.objects.first()
+    device_id = request.headers.get('X-Device-Id', 'default-device')
+    creds = GoogleDriveCredentials.objects.filter(device_id=device_id).first()
+    settings_obj = BackupSettings.objects.filter(device_id=device_id).first()
     state = BackupState.objects.first()
 
     status = {
@@ -293,7 +297,8 @@ def get_status(request):
 @permission_classes([AllowAny])
 @api_error_handler
 def trigger_backup(request):
-    trigger_manual_backup()
+    device_id = request.headers.get('X-Device-Id', 'default-device')
+    trigger_manual_backup(device_id=device_id)
     return Response({'success': True, 'message': 'Backup completed successfully.'})
 
 @api_view(['GET'])
@@ -407,7 +412,8 @@ def health_check(request):
         health["google_configured"] = True
 
     try:
-        creds = GoogleDriveCredentials.objects.first()
+        device_id = request.headers.get('X-Device-Id', 'default-device')
+        creds = GoogleDriveCredentials.objects.filter(device_id=device_id).first()
         if creds and creds.get_token():
             health["credentials_valid"] = True
     except Exception:

@@ -36,7 +36,7 @@ def check_and_run_backup():
         logger.error(f"Cron auto-backup error: {e}")
         raise e
 
-def trigger_manual_backup():
+def trigger_manual_backup(device_id=None):
     """
     Called by the /api/backup/trigger/ endpoint.
     Executes a backup synchronously.
@@ -49,7 +49,7 @@ def trigger_manual_backup():
         raise Exception("Backup is already in progress.")
         
     try:
-        BackupService().run_backup()
+        BackupService(device_id=device_id).run_backup()
     except Exception as e:
         logger.error(f"Manual backup failed: {e}")
         raise e

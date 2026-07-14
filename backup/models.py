@@ -24,6 +24,7 @@ class GoogleDriveCredentials(models.Model):
     token_uri = models.CharField(max_length=255)
     scopes = models.TextField() # comma separated
     email = models.EmailField(blank=True, null=True)
+    device_id = models.CharField(max_length=255, default='default-device')
 
     def encrypt_val(self, value):
         if not value: return None
