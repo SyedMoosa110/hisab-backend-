@@ -33,6 +33,10 @@ class GoogleDriveCredentials(models.Model):
 
     def decrypt_val(self, value):
         if not value: return None
+        if isinstance(value, memoryview):
+            value = bytes(value)
+        elif not isinstance(value, (bytes, str)):
+            value = bytes(value)
         f = Fernet(get_encryption_key())
         return f.decrypt(value).decode('utf-8')
 

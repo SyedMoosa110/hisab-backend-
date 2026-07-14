@@ -59,14 +59,25 @@ class BackupService:
             
         services = []
         for creds_obj in creds_qs:
-            if creds_obj.get_token():
+            access_token = creds_obj.get_token()
+            if access_token:
+                refresh_token = creds_obj.get_refresh_token()
+                
+                print(f"[Drive Service DEBUG] access_token type: {type(access_token)}")
+                print(f"[Drive Service DEBUG] refresh_token type: {type(refresh_token)}")
+                print(f"[Drive Service DEBUG] access_token repr: {repr(access_token)}")
+                
+                if not isinstance(access_token, str) or not isinstance(refresh_token, str):
+                    raise TypeError(f"Decrypted tokens must be strings! Access Token: {type(access_token)}, Refresh Token: {type(refresh_token)}")
+
                 creds = Credentials(
-                    token=creds_obj.get_token(),
-                    refresh_token=creds_obj.get_refresh_token(),
+                    token=access_token,
+                    refresh_token=refresh_token,
                     client_id=creds_obj.client_id,
                     client_secret=creds_obj.client_secret,
                     token_uri=creds_obj.token_uri
                 )
+                print(f"[Drive Service DEBUG] Credentials.token type: {type(creds.token)}")
                 services.append(build('drive', 'v3', credentials=creds))
                 
         if not services:
