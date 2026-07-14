@@ -141,31 +141,40 @@ def auth_callback(request):
     else:
         print("[OAuth DEBUG] No code_verifier found in session during callback.")
         
+    print(f"[OAuth DEBUG] Received authorization code.")
     try:
+        print("[OAuth DEBUG] Token exchange started.")
         flow.fetch_token(code=code)
+        print("[OAuth DEBUG] Token exchange successful.")
     except Exception as e:
         print(f"[OAuth DEBUG] fetch_token failed: {str(e)}")
         return redirect(f"{frontend_url}/backup?connected=false&error=token_exchange_failed")
         
-    credentials = flow.credentials
-    
-    # Get user email
-    drive_service = build('drive', 'v3', credentials=credentials)
-    about = drive_service.about().get(fields='user').execute()
-    email = about['user']['emailAddress']
+    try:
+        credentials = flow.credentials
+        
+        # Get user email
+        drive_service = build('drive', 'v3', credentials=credentials)
+        about = drive_service.about().get(fields='user').execute()
+        email = about['user']['emailAddress']
 
-    # Save credentials
-    creds_obj, _ = GoogleDriveCredentials.objects.get_or_create(id=1)
-    creds_obj.client_id = flow.client_config['client_id']
-    creds_obj.client_secret = flow.client_config['client_secret']
-    creds_obj.token_uri = flow.client_config['token_uri']
-    creds_obj.scopes = ",".join(SCOPES)
-    creds_obj.email = email
-    creds_obj.save_tokens(credentials.token, credentials.refresh_token)
+        # Save credentials
+        creds_obj, _ = GoogleDriveCredentials.objects.get_or_create(id=1)
+        creds_obj.client_id = flow.client_config['client_id']
+        creds_obj.client_secret = flow.client_config['client_secret']
+        creds_obj.token_uri = flow.client_config['token_uri']
+        creds_obj.scopes = ",".join(SCOPES)
+        creds_obj.email = email
+        creds_obj.save_tokens(credentials.token, credentials.refresh_token)
+        print("[OAuth DEBUG] Credentials saved successfully.")
 
-    BackupLog.objects.create(event=f"Google Drive Connected: {email}", level="SUCCESS")
+        BackupLog.objects.create(event=f"Google Drive Connected: {email}", level="SUCCESS")
 
-    return redirect(f"{frontend_url}/backup?connected=true")
+        print(f"[OAuth DEBUG] Redirecting to frontend: {frontend_url}/backup?connected=true")
+        return redirect(f"{frontend_url}/backup?connected=true")
+    except Exception as e:
+        print(f"[OAuth DEBUG] Error saving credentials or fetching email: {str(e)}")
+        return redirect(f"{frontend_url}/backup?connected=false&error=server_error")
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
