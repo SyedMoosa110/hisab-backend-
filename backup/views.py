@@ -176,49 +176,80 @@ def auth_callback(request):
         print(f"[OAuth DEBUG] Error saving credentials or fetching email: {str(e)}")
         return redirect(f"{frontend_url}/backup?connected=false&error=server_error")
 
+import logging
+logger = logging.getLogger(__name__)
+
 @api_view(['POST'])
 @authentication_classes([])
 @permission_classes([AllowAny])
-@api_error_handler
 def disconnect(request):
-    print("=== DISCONNECT DEBUG ===")
-    print(f"User: {request.user}")
-    print(f"Auth: {request.auth}")
-    print(f"Headers: {request.headers}")
-    print("========================")
-    
-    creds = GoogleDriveCredentials.objects.first()
-    if not creds:
+    step = "init"
+    try:
+        print("[Disconnect] Disconnect called")
+        
+        step = "db_lookup"
+        print("[Disconnect] Credentials found?")
+        creds = GoogleDriveCredentials.objects.first()
+        if not creds:
+            print("[Disconnect] No credentials found.")
+            return Response({
+                "success": True,
+                "connected": False,
+                "message": "Already disconnected"
+            })
+            
+        step = "get_token"
+        print("[Disconnect] Refresh token exists?")
+        try:
+            token = creds.get_token()
+            print(f"[Disconnect] Token extracted: {bool(token)}")
+        except Exception as e:
+            print(f"[Disconnect] Failed to get token (ignoring): {e}")
+            token = None
+            
+        if token:
+            step = "revoke_token"
+            print("[Disconnect] Calling revoke endpoint...")
+            try:
+                import requests
+                requests.post('https://oauth2.googleapis.com/revoke',
+                    params={'token': token},
+                    headers={'content-type': 'application/x-www-form-urlencoded'}
+                )
+            except Exception as e:
+                print(f"[Disconnect] Token revocation failed (ignoring): {e}")
+                
+        step = "delete_credentials"
+        print("[Disconnect] Deleting credentials...")
+        creds.delete()
+        
+        step = "clear_session"
+        print("[Disconnect] Clearing session...")
+        if hasattr(request, 'session'):
+            request.session.pop('oauth_state', None)
+            request.session.pop('code_verifier', None)
+            request.session.modified = True
+            
+        step = "write_log"
+        print("[Disconnect] Database commit successful...")
+        BackupLog.objects.create(event="Google Drive Disconnected", level="INFO")
+        
+        step = "return_success"
+        print("[Disconnect] Returning success...")
         return Response({
             "success": True,
-            "connected": False,
-            "message": "No Google account is connected."
+            "message": "Google Drive disconnected successfully."
         })
-
-    token = creds.get_token()
-    if token:
-        try:
-            import requests
-            requests.post('https://oauth2.googleapis.com/revoke',
-                params={'token': token},
-                headers={'content-type': 'application/x-www-form-urlencoded'}
-            )
-        except Exception as e:
-            print(f"[OAuth DEBUG] Token revocation failed: {e}")
-
-    creds.delete()
-    
-    # Clear OAuth session data
-    request.session.pop('oauth_state', None)
-    request.session.pop('code_verifier', None)
-    request.session.modified = True
-
-    BackupLog.objects.create(event="Google Drive Disconnected", level="INFO")
-    
-    return Response({
-        "success": True,
-        "message": "Google Drive disconnected successfully."
-    })
+    except Exception as e:
+        import traceback
+        logger.exception(f"Disconnect failed at step: {step}")
+        return Response({
+            "success": False,
+            "step": step,
+            "exception_type": type(e).__name__,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }, status=200)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
