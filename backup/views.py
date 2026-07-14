@@ -34,7 +34,7 @@ def api_error_handler(func):
             return Response({
                 'success': False,
                 'error': str(e)
-            }, status=400)
+            }, status=200)
         except Exception as e:
             error_response = {
                 'success': False,
@@ -43,7 +43,7 @@ def api_error_handler(func):
             }
             if settings.DEBUG:
                 error_response['traceback'] = traceback.format_exc()
-            return Response(error_response, status=500)
+            return Response(error_response, status=200)
     return wrapper
 
 def get_flow():
@@ -51,8 +51,13 @@ def get_flow():
     client_secret = os.environ.get('GOOGLE_CLIENT_SECRET')
     redirect_uri = os.environ.get('GOOGLE_REDIRECT_URI', 'http://localhost:5173/backup/callback')
     
-    if not client_id or not client_secret:
-        raise ValueError("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables are missing.")
+    missing = []
+    if not client_id: missing.append('GOOGLE_CLIENT_ID')
+    if not client_secret: missing.append('GOOGLE_CLIENT_SECRET')
+    if not os.environ.get('GOOGLE_REDIRECT_URI'): missing.append('GOOGLE_REDIRECT_URI')
+    
+    if missing:
+        return None, missing
         
     client_config = {
         "web": {
@@ -71,15 +76,27 @@ def get_flow():
         scopes=SCOPES,
         redirect_uri=redirect_uri
     )
-    return flow
+    return flow, missing
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 @api_error_handler
 def get_auth_url(request):
-    flow = get_flow()
+    flow, missing = get_flow()
+    if missing:
+        return Response({
+            "success": False,
+            "configured": False,
+            "message": "Google OAuth is not configured.",
+            "missing": missing
+        }, status=200)
+        
     auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
-    return Response({'url': auth_url})
+    return Response({
+        "success": True,
+        "configured": True,
+        "auth_url": auth_url
+    }, status=200)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -87,9 +104,12 @@ def get_auth_url(request):
 def auth_callback(request):
     code = request.data.get('code')
     if not code:
-        return Response({'success': False, 'error': 'Code is required'}, status=400)
+        return Response({'success': False, 'error': 'Code is required'}, status=200)
     
-    flow = get_flow()
+    flow, missing = get_flow()
+    if missing:
+        return Response({'success': False, 'error': 'Server missing Google Config'}, status=200)
+        
     flow.fetch_token(code=code)
     credentials = flow.credentials
     
@@ -196,29 +216,48 @@ def health_check(request):
     health = {
         "database_connected": False,
         "backup_tables_exist": False,
+        "migration_status": "Unknown",
+        "missing_tables": [],
         "google_configured": False,
         "credentials_valid": False,
         "storage_writable": False,
         "server_environment": "vercel" if os.environ.get('VERCEL') else "local",
-        "ready": False
+        "ready": False,
+        "google_env": {
+            "client_id": bool(os.environ.get('GOOGLE_CLIENT_ID')),
+            "client_secret": bool(os.environ.get('GOOGLE_CLIENT_SECRET')),
+            "redirect_uri": bool(os.environ.get('GOOGLE_REDIRECT_URI'))
+        }
     }
 
     try:
         from django.db import connection
         connection.ensure_connection()
         health["database_connected"] = True
-    except Exception:
-        pass
+    except Exception as e:
+        health["migration_status"] = f"DB Connection Failed: {str(e)}"
 
+    missing_tables = []
     try:
-        BackupState.objects.first()
-        health["backup_tables_exist"] = True
-    except Exception:
-        pass
+        from django.db import connection
+        tables = connection.introspection.table_names()
+        required_tables = ['backup_googledrivecredentials', 'backup_backupsettings', 'backup_backupstate', 'backup_backuplog']
+        for t in required_tables:
+            if t not in tables:
+                missing_tables.append(t)
+        
+        health["missing_tables"] = missing_tables
+        
+        if not missing_tables:
+            BackupState.objects.first()
+            health["backup_tables_exist"] = True
+            health["migration_status"] = "Migrated"
+        else:
+            health["migration_status"] = "Missing Tables"
+    except Exception as e:
+        health["migration_status"] = str(e)
 
-    client_id = os.environ.get('GOOGLE_CLIENT_ID')
-    client_secret = os.environ.get('GOOGLE_CLIENT_SECRET')
-    if client_id and client_secret:
+    if health["google_env"]["client_id"] and health["google_env"]["client_secret"] and health["google_env"]["redirect_uri"]:
         health["google_configured"] = True
 
     try:
