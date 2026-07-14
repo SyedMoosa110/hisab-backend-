@@ -118,7 +118,7 @@ def auth_callback(request):
     
     error = request.GET.get('error')
     if error:
-        redirect_url = f"{frontend_url}/backup?connected=false&error={error}"
+        redirect_url = f"{frontend_url}/?connected=false&error={error}"
         print("[OAuth] Final redirect:", redirect_url)
         return HttpResponseRedirect(redirect_url)
 
@@ -129,13 +129,13 @@ def auth_callback(request):
     print("State:", state)
     
     if not authorization_code:
-        redirect_url = f"{frontend_url}/backup?connected=false&error=missing_code"
+        redirect_url = f"{frontend_url}/?connected=false&error=missing_code"
         print("[OAuth] Final redirect:", redirect_url)
         return HttpResponseRedirect(redirect_url)
     
     flow, missing = get_flow()
     if missing:
-        redirect_url = f"{frontend_url}/backup?connected=false&error=server_missing_config"
+        redirect_url = f"{frontend_url}/?connected=false&error=server_missing_config"
         print("[OAuth] Final redirect:", redirect_url)
         return HttpResponseRedirect(redirect_url)
         
@@ -155,7 +155,7 @@ def auth_callback(request):
         print("[OAuth DEBUG] Token exchange successful.")
     except Exception as e:
         print(f"[OAuth DEBUG] fetch_token failed: {str(e)}")
-        redirect_url = f"{frontend_url}/backup?connected=false&error=token_exchange_failed"
+        redirect_url = f"{frontend_url}/?connected=false&error=token_exchange_failed"
         print("[OAuth] Final redirect:", redirect_url)
         return HttpResponseRedirect(redirect_url)
         
@@ -185,11 +185,11 @@ def auth_callback(request):
         print("[OAuth DEBUG] Database commit complete.")
     except Exception as e:
         print(f"[OAuth DEBUG] Error saving credentials or fetching email: {str(e)}")
-        redirect_url = f"{frontend_url}/backup?connected=false&error=database_save_failed"
+        redirect_url = f"{frontend_url}/?connected=false&error=database_save_failed"
         print("[OAuth] Final redirect:", redirect_url)
         return HttpResponseRedirect(redirect_url)
         
-    redirect_url = f"{frontend_url}/backup?connected=true"
+    redirect_url = f"{frontend_url}/?connected=true"
     print("[OAuth] Final redirect:", redirect_url)
     return HttpResponseRedirect(redirect_url)
 
