@@ -1,7 +1,7 @@
 import os
 import traceback
 from functools import wraps
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from django.conf import settings
@@ -177,9 +177,16 @@ def auth_callback(request):
         return redirect(f"{frontend_url}/backup?connected=false&error=server_error")
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 @api_error_handler
 def disconnect(request):
+    print("=== DISCONNECT DEBUG ===")
+    print(f"User: {request.user}")
+    print(f"Auth: {request.auth}")
+    print(f"Headers: {request.headers}")
+    print("========================")
+    
     creds = GoogleDriveCredentials.objects.first()
     if not creds:
         return Response({
@@ -234,6 +241,7 @@ def get_status(request):
     return Response(status)
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 @api_error_handler
 def trigger_backup(request):
