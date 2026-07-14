@@ -107,20 +107,20 @@ def get_auth_url(request):
         "configured": True,
         "auth_url": auth_url
     }, status=200)
-from django.shortcuts import redirect
+from django.http import HttpResponseRedirect
 
 def auth_callback(request):
     print("[OAuth] Callback entered")
     print(request.GET)
     
+    # Hardcode for testing as requested
+    frontend_url = "https://hisab-frontend-fawn.vercel.app"
+    
     error = request.GET.get('error')
-    frontend_url = getattr(settings, 'FRONTEND_URL', None)
-    if not frontend_url:
-        frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
-    frontend_url = frontend_url.rstrip('/')
-
     if error:
-        return redirect(f"{frontend_url}/backup?connected=false&error={error}")
+        redirect_url = f"{frontend_url}/backup?connected=false&error={error}"
+        print("[OAuth] Final redirect:", redirect_url)
+        return HttpResponseRedirect(redirect_url)
 
     authorization_code = request.GET.get('code')
     state = request.GET.get('state')
@@ -129,11 +129,15 @@ def auth_callback(request):
     print("State:", state)
     
     if not authorization_code:
-        return redirect(f"{frontend_url}/backup?connected=false&error=missing_code")
+        redirect_url = f"{frontend_url}/backup?connected=false&error=missing_code"
+        print("[OAuth] Final redirect:", redirect_url)
+        return HttpResponseRedirect(redirect_url)
     
     flow, missing = get_flow()
     if missing:
-        return redirect(f"{frontend_url}/backup?connected=false&error=server_missing_config")
+        redirect_url = f"{frontend_url}/backup?connected=false&error=server_missing_config"
+        print("[OAuth] Final redirect:", redirect_url)
+        return HttpResponseRedirect(redirect_url)
         
     # Restore PKCE code verifier and state
     session_state = request.session.get('oauth_state')
@@ -151,7 +155,9 @@ def auth_callback(request):
         print("[OAuth DEBUG] Token exchange successful.")
     except Exception as e:
         print(f"[OAuth DEBUG] fetch_token failed: {str(e)}")
-        return redirect(f"{frontend_url}/backup?connected=false&error=token_exchange_failed")
+        redirect_url = f"{frontend_url}/backup?connected=false&error=token_exchange_failed"
+        print("[OAuth] Final redirect:", redirect_url)
+        return HttpResponseRedirect(redirect_url)
         
     try:
         credentials = flow.credentials
@@ -179,9 +185,13 @@ def auth_callback(request):
         print("[OAuth DEBUG] Database commit complete.")
     except Exception as e:
         print(f"[OAuth DEBUG] Error saving credentials or fetching email: {str(e)}")
-        return redirect(f"{frontend_url}/backup?connected=false&error=database_save_failed")
+        redirect_url = f"{frontend_url}/backup?connected=false&error=database_save_failed"
+        print("[OAuth] Final redirect:", redirect_url)
+        return HttpResponseRedirect(redirect_url)
         
-    return redirect(f"{frontend_url}/backup?connected=true")
+    redirect_url = f"{frontend_url}/backup?connected=true"
+    print("[OAuth] Final redirect:", redirect_url)
+    return HttpResponseRedirect(redirect_url)
 
 import logging
 logger = logging.getLogger(__name__)
