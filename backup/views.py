@@ -97,18 +97,28 @@ def get_auth_url(request):
         "configured": True,
         "auth_url": auth_url
     }, status=200)
+from django.shortcuts import redirect
 
-@api_view(['POST'])
+@api_view(['GET'])
 @permission_classes([AllowAny])
 @api_error_handler
 def auth_callback(request):
-    code = request.data.get('code')
+    error = request.GET.get('error')
+    frontend_url = getattr(settings, 'FRONTEND_URL', None)
+    if not frontend_url:
+        frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
+    frontend_url = frontend_url.rstrip('/')
+
+    if error:
+        return redirect(f"{frontend_url}/backup?connected=false&error={error}")
+
+    code = request.GET.get('code')
     if not code:
-        return Response({'success': False, 'error': 'Code is required'}, status=200)
+        return redirect(f"{frontend_url}/backup?connected=false&error=missing_code")
     
     flow, missing = get_flow()
     if missing:
-        return Response({'success': False, 'error': 'Server missing Google Config'}, status=200)
+        return redirect(f"{frontend_url}/backup?connected=false&error=server_missing_config")
         
     flow.fetch_token(code=code)
     credentials = flow.credentials
@@ -129,7 +139,7 @@ def auth_callback(request):
 
     BackupLog.objects.create(event=f"Google Drive Connected: {email}", level="SUCCESS")
 
-    return Response({'success': True, 'email': email})
+    return redirect(f"{frontend_url}/backup?connected=true")
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
