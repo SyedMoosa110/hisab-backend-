@@ -282,3 +282,177 @@ class BackupService:
         if len(items) > 30:
             for item in items[30:]:
                 service.files().delete(fileId=item['id']).execute()
+
+    def decrypt_file(self, encrypted_path, aes_key):
+        decrypted_path = encrypted_path.replace('.enc', '.decrypted')
+        aesgcm = AESGCM(aes_key)
+        
+        with open(encrypted_path, 'rb') as f:
+            data = f.read()
+            
+        nonce = data[:12]
+        ct = data[12:]
+        
+        try:
+            pt = aesgcm.decrypt(nonce, ct, None)
+        except Exception as e:
+            raise ValueError(f"Decryption failed. Incorrect key or corrupted file: {e}")
+            
+        with open(decrypted_path, 'wb') as f:
+            f.write(pt)
+            
+        return decrypted_path
+
+    def decompress_file(self, compressed_path):
+        decompressed_path = compressed_path.replace('.gz', '.json').replace('.decrypted', '')
+        with gzip.open(compressed_path, 'rb') as f_in:
+            with open(decompressed_path, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        return decompressed_path
+
+    def run_restore(self, company_id):
+        import time
+        from django.apps import apps
+        from django.db import transaction
+        from accounts.models import Sale, Transaction, DuePayment, Stock, Note, AuditLog, Category, Party, Account
+
+        start_time = time.time()
+        
+        def log_stage(stage_name, prev_time=None):
+            now = time.time()
+            if prev_time:
+                elapsed = now - prev_time
+                self._log(f"{stage_name} (took {elapsed:.2f}s)", level="INFO")
+            else:
+                self._log(stage_name, level="INFO")
+            return now
+
+        t = log_stage("Restore Started")
+        t = log_stage("Connecting to Drive...", t)
+        
+        temp_dir = self._get_temp_dir()
+        aes_key = self._derive_aes_key(settings.SECRET_KEY)
+        service = self._get_drive_services()[0]
+        
+        try:
+            folder_id = self._get_or_create_folder(service, 'Business Accounting Backup')
+            query = f"name='latest.enc' and '{folder_id}' in parents and trashed=false"
+            results = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
+            items = results.get('files', [])
+            if not items:
+                raise ValueError("Could not find latest.enc in Google Drive.")
+            file_id = items[0]['id']
+
+            t = log_stage("Downloading latest.enc", t)
+            encrypted_path = os.path.join(temp_dir, 'latest.enc')
+            request = service.files().get_media(fileId=file_id)
+            with open(encrypted_path, 'wb') as fh:
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while done is False:
+                    status, done = downloader.next_chunk()
+                    
+            t = log_stage("Downloading metadata.json", t)
+            query = f"name='metadata.json' and '{folder_id}' in parents and trashed=false"
+            meta_results = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
+            meta_items = meta_results.get('files', [])
+            if not meta_items:
+                raise ValueError("Could not find metadata.json in Google Drive.")
+            meta_id = meta_items[0]['id']
+            
+            meta_path = os.path.join(temp_dir, 'metadata.json')
+            m_request = service.files().get_media(fileId=meta_id)
+            with open(meta_path, 'wb') as fh:
+                m_downloader = MediaIoBaseDownload(fh, m_request)
+                m_done = False
+                while m_done is False:
+                    _, m_done = m_downloader.next_chunk()
+                    
+            with open(meta_path, 'r') as mf:
+                meta_json = json.load(mf)
+                
+            t = log_stage("Metadata verified", t)
+            required_keys = ['sha256_checksum', 'version', 'encryption', 'timestamp']
+            for k in required_keys:
+                if k not in meta_json:
+                    raise ValueError(f"Missing required metadata field: {k}")
+            
+            if meta_json.get('encryption') != 'AES-256-GCM':
+                raise ValueError("Unsupported encryption algorithm in metadata.")
+                
+            t = log_stage("SHA verified", t)
+            checksum = self.generate_sha256(encrypted_path)
+            if checksum != meta_json.get('sha256_checksum'):
+                raise ValueError("Backup integrity verification failed. Checksum mismatch.")
+                
+            t = log_stage("Decrypting", t)
+            decrypted_path = self.decrypt_file(encrypted_path, aes_key)
+            
+            t = log_stage("Decompressing", t)
+            json_path = self.decompress_file(decrypted_path)
+            
+            t = log_stage("Parsing JSON", t)
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+            t = log_stage("Filtering company data", t)
+            excluded_apps = {'auth', 'sessions', 'admin', 'contenttypes', 'backup'}
+            excluded_models = {'accounts.company', 'accounts.userprofile'}
+            
+            filtered_records = []
+            for obj in data:
+                model_name = obj.get('model', '')
+                app_label = model_name.split('.')[0]
+                if app_label in excluded_apps or model_name in excluded_models:
+                    continue
+                fields = obj.get('fields', {})
+                if fields.get('company') == company_id:
+                    filtered_records.append(obj)
+            
+            t = log_stage("Deleting existing records", t)
+            deletion_order = [Sale, Transaction, DuePayment, Stock, Note, AuditLog, Category, Party, Account]
+            import_order = [Account, Party, Category, Stock, AuditLog, Note, DuePayment, Transaction, Sale]
+            
+            try:
+                with transaction.atomic():
+                    for model in deletion_order:
+                        model.objects.filter(company_id=company_id).delete()
+                        
+                    t = log_stage("Importing records", t)
+                    
+                    # Group records by model
+                    records_by_model = {}
+                    for obj in filtered_records:
+                        model_name = obj.get('model', '')
+                        if model_name not in records_by_model:
+                            records_by_model[model_name] = []
+                        records_by_model[model_name].append(obj)
+                        
+                    for model in import_order:
+                        model_name = model._meta.label_lower
+                        model_records = records_by_model.get(model_name, [])
+                        instances = []
+                        for rec in model_records:
+                            fields = rec.get('fields', {})
+                            pk = rec.get('pk')
+                            instances.append(model(**fields, pk=pk))
+                        
+                        if instances:
+                            model.objects.bulk_create(instances)
+                            
+            except Exception as e:
+                import traceback
+                error_trace = traceback.format_exc()
+                self._log(f"Restore Failed during database transaction: {str(e)}", level="ERROR")
+                self._log(error_trace, level="ERROR")
+                raise ValueError(f"Database import failed: {str(e)}\n\nTraceback:\n{error_trace}")
+                
+            t = log_stage("Restore completed", t)
+            self._log("Restore Successful", level="SUCCESS")
+            
+        except Exception as e:
+            self._log(f"Restore Failed: {str(e)}", level="ERROR")
+            raise
+        finally:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)

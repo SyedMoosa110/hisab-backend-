@@ -325,12 +325,32 @@ def get_logs(request):
 @permission_classes([AllowAny])
 @api_error_handler
 def restore_backup(request):
-    file_id = request.data.get('file_id')
-    if not file_id:
-        return Response({'success': False, 'error': 'File ID required'}, status=400)
-    
-    BackupLog.objects.create(event=f"Restore initiated for file {file_id}", level="INFO")
-    return Response({'success': True, 'message': 'Restore validation successful. Please restart the application.'})
+    if not request.user.is_authenticated:
+        return Response({'success': False, 'error': 'Authentication required to restore.'}, status=401)
+        
+    try:
+        company_id = request.user.profile.company_id
+        if not company_id:
+            return Response({'success': False, 'error': 'No company associated with user.'}, status=400)
+            
+        device_id = request.headers.get('X-Device-Id', 'default-device')
+        service = BackupService(device_id=device_id)
+        
+        # We need to run it synchronously so the API can respond with success
+        service.run_restore(company_id)
+        
+        return Response({
+            'success': True, 
+            'message': 'Restore completed successfully.'
+        })
+    except Exception as e:
+        import traceback
+        return Response({
+            'success': False,
+            'step': 'Restore',
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }, status=500)
 
 @api_view(['POST', 'GET'])
 @permission_classes([AllowAny])
