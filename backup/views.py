@@ -180,9 +180,38 @@ def auth_callback(request):
 @permission_classes([AllowAny])
 @api_error_handler
 def disconnect(request):
-    GoogleDriveCredentials.objects.all().delete()
+    creds = GoogleDriveCredentials.objects.first()
+    if not creds:
+        return Response({
+            "success": True,
+            "connected": False,
+            "message": "No Google account is connected."
+        })
+
+    token = creds.get_token()
+    if token:
+        try:
+            import requests
+            requests.post('https://oauth2.googleapis.com/revoke',
+                params={'token': token},
+                headers={'content-type': 'application/x-www-form-urlencoded'}
+            )
+        except Exception as e:
+            print(f"[OAuth DEBUG] Token revocation failed: {e}")
+
+    creds.delete()
+    
+    # Clear OAuth session data
+    request.session.pop('oauth_state', None)
+    request.session.pop('code_verifier', None)
+    request.session.modified = True
+
     BackupLog.objects.create(event="Google Drive Disconnected", level="INFO")
-    return Response({'success': True})
+    
+    return Response({
+        "success": True,
+        "message": "Google Drive disconnected successfully."
+    })
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
