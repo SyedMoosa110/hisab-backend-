@@ -91,7 +91,17 @@ def get_auth_url(request):
             "missing": missing
         }, status=200)
         
-    auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
+    auth_url, state = flow.authorization_url(prompt='consent', access_type='offline')
+    request.session['oauth_state'] = state
+    
+    if hasattr(flow, 'code_verifier'):
+        request.session['code_verifier'] = flow.code_verifier
+        print(f"[OAuth DEBUG] PKCE is ENABLED. Generated code_verifier (length: {len(flow.code_verifier)})")
+    else:
+        print("[OAuth DEBUG] PKCE is NOT enabled for this flow.")
+        
+    request.session.modified = True
+
     return Response({
         "success": True,
         "configured": True,
@@ -120,7 +130,23 @@ def auth_callback(request):
     if missing:
         return redirect(f"{frontend_url}/backup?connected=false&error=server_missing_config")
         
-    flow.fetch_token(code=code)
+    # Restore PKCE code verifier and state
+    state = request.GET.get('state')
+    session_state = request.session.get('oauth_state')
+    code_verifier = request.session.get('code_verifier')
+    
+    if code_verifier:
+        flow.code_verifier = code_verifier
+        print(f"[OAuth DEBUG] Restored code_verifier from session (length: {len(code_verifier)})")
+    else:
+        print("[OAuth DEBUG] No code_verifier found in session during callback.")
+        
+    try:
+        flow.fetch_token(code=code)
+    except Exception as e:
+        print(f"[OAuth DEBUG] fetch_token failed: {str(e)}")
+        return redirect(f"{frontend_url}/backup?connected=false&error=token_exchange_failed")
+        
     credentials = flow.credentials
     
     # Get user email
