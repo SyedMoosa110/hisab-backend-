@@ -109,10 +109,10 @@ def get_auth_url(request):
     }, status=200)
 from django.shortcuts import redirect
 
-@api_view(['GET'])
-@permission_classes([AllowAny])
-@api_error_handler
 def auth_callback(request):
+    print("[OAuth] Callback entered")
+    print(request.GET)
+    
     error = request.GET.get('error')
     frontend_url = getattr(settings, 'FRONTEND_URL', None)
     if not frontend_url:
@@ -122,8 +122,13 @@ def auth_callback(request):
     if error:
         return redirect(f"{frontend_url}/backup?connected=false&error={error}")
 
-    code = request.GET.get('code')
-    if not code:
+    authorization_code = request.GET.get('code')
+    state = request.GET.get('state')
+    
+    print("Code:", authorization_code)
+    print("State:", state)
+    
+    if not authorization_code:
         return redirect(f"{frontend_url}/backup?connected=false&error=missing_code")
     
     flow, missing = get_flow()
@@ -131,7 +136,6 @@ def auth_callback(request):
         return redirect(f"{frontend_url}/backup?connected=false&error=server_missing_config")
         
     # Restore PKCE code verifier and state
-    state = request.GET.get('state')
     session_state = request.session.get('oauth_state')
     code_verifier = request.session.get('code_verifier')
     
@@ -141,10 +145,9 @@ def auth_callback(request):
     else:
         print("[OAuth DEBUG] No code_verifier found in session during callback.")
         
-    print(f"[OAuth DEBUG] Received authorization code.")
+    print("[OAuth DEBUG] Starting token exchange...")
     try:
-        print("[OAuth DEBUG] Token exchange started.")
-        flow.fetch_token(code=code)
+        flow.fetch_token(code=authorization_code)
         print("[OAuth DEBUG] Token exchange successful.")
     except Exception as e:
         print(f"[OAuth DEBUG] fetch_token failed: {str(e)}")
@@ -152,12 +155,15 @@ def auth_callback(request):
         
     try:
         credentials = flow.credentials
+        print(f"[OAuth DEBUG] Refresh token received? {bool(credentials.refresh_token)}")
+        print(f"[OAuth DEBUG] Access token received? {bool(credentials.token)}")
         
         # Get user email
         drive_service = build('drive', 'v3', credentials=credentials)
         about = drive_service.about().get(fields='user').execute()
         email = about['user']['emailAddress']
 
+        print("[OAuth DEBUG] Saving credentials...")
         # Save credentials
         creds_obj, _ = GoogleDriveCredentials.objects.get_or_create(id=1)
         creds_obj.client_id = flow.client_config['client_id']
@@ -166,15 +172,16 @@ def auth_callback(request):
         creds_obj.scopes = ",".join(SCOPES)
         creds_obj.email = email
         creds_obj.save_tokens(credentials.token, credentials.refresh_token)
-        print("[OAuth DEBUG] Credentials saved successfully.")
+        print("[OAuth DEBUG] Credentials saved.")
 
         BackupLog.objects.create(event=f"Google Drive Connected: {email}", level="SUCCESS")
 
-        print(f"[OAuth DEBUG] Redirecting to frontend: {frontend_url}/backup?connected=true")
-        return redirect(f"{frontend_url}/backup?connected=true")
+        print("[OAuth DEBUG] Database commit complete.")
     except Exception as e:
         print(f"[OAuth DEBUG] Error saving credentials or fetching email: {str(e)}")
-        return redirect(f"{frontend_url}/backup?connected=false&error=server_error")
+        return redirect(f"{frontend_url}/backup?connected=false&error=database_save_failed")
+        
+    return redirect(f"{frontend_url}/backup?connected=true")
 
 import logging
 logger = logging.getLogger(__name__)
