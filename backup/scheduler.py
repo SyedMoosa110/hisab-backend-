@@ -1,41 +1,46 @@
-from apscheduler.schedulers.background import BackgroundScheduler
 from django.utils import timezone
 from datetime import timedelta
 import logging
 
 logger = logging.getLogger(__name__)
-scheduler = BackgroundScheduler()
 
 def check_and_run_backup():
-    # Import inside to avoid circular imports / AppRegistryNotReady
+    """
+    Called by the /api/backup/cron/ endpoint.
+    Executes a backup synchronously if the dirty debounce time has passed.
+    """
     from backup.models import BackupState, BackupSettings
     from backup.services import BackupService
 
     try:
         settings_obj = BackupSettings.objects.first()
         if settings_obj and not settings_obj.auto_backup_enabled:
-            return
+            return False, "Auto-backup disabled"
 
         state = BackupState.objects.first()
         if not state:
-            return
+            return False, "No backup state found"
 
         if state.is_dirty and state.status == 'IDLE':
             # Check 60-second debounce
             time_since_modified = timezone.now() - state.last_modified
             if time_since_modified >= timedelta(seconds=60):
-                # Debounce passed, run backup
+                # Debounce passed, run backup synchronously for Vercel Cron
                 service = BackupService()
                 service.run_backup()
+                return True, "Auto-backup completed"
+            else:
+                return False, "Debounce period not met"
+        return False, "No pending backups"
     except Exception as e:
-        logger.error(f"Scheduler error: {e}")
-
-def start_scheduler():
-    if not scheduler.running:
-        scheduler.add_job(check_and_run_backup, 'interval', seconds=10, id='auto_backup_checker', replace_existing=True)
-        scheduler.start()
+        logger.error(f"Cron auto-backup error: {e}")
+        raise e
 
 def trigger_manual_backup():
+    """
+    Called by the /api/backup/trigger/ endpoint.
+    Executes a backup synchronously.
+    """
     from backup.services import BackupService
     from backup.models import BackupState
     
@@ -43,10 +48,8 @@ def trigger_manual_backup():
     if state.status != 'IDLE':
         raise Exception("Backup is already in progress.")
         
-    def run_manual():
-        try:
-            BackupService().run_backup()
-        except Exception as e:
-            logger.error(f"Manual backup failed: {e}")
-
-    scheduler.add_job(run_manual, 'date', run_date=timezone.now(), id='manual_backup', replace_existing=True)
+    try:
+        BackupService().run_backup()
+    except Exception as e:
+        logger.error(f"Manual backup failed: {e}")
+        raise e

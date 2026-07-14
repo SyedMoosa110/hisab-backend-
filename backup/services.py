@@ -15,15 +15,14 @@ from backup.models import BackupState, BackupLog, GoogleDriveCredentials, Backup
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
-import io
 
 class BackupService:
     def __init__(self):
-        self.temp_dir = os.path.join(settings.BASE_DIR, 'backup_temp')
-        os.makedirs(self.temp_dir, exist_ok=True)
+        # NO side effects in the constructor.
+        # Directory creation and DB queries are moved to actual methods.
         self.device_name = os.environ.get('COMPUTERNAME', 'Unknown Device')
-        # Generate AES key based on SECRET_KEY
-        self.aes_key = self._derive_aes_key(settings.SECRET_KEY)
+        # We compute this dynamically when needed to avoid issues.
+        pass
 
     def _derive_aes_key(self, secret):
         salt = b"backup_salt_123"
@@ -35,19 +34,31 @@ class BackupService:
         )
         return kdf.derive(secret.encode('utf-8'))
 
+    def _get_temp_dir(self):
+        # Use strictly /tmp for Vercel compatibility
+        temp_dir = '/tmp/backup_temp'
+        os.makedirs(temp_dir, exist_ok=True)
+        return temp_dir
+
     def _log(self, message, level='INFO'):
-        BackupLog.objects.create(event=message, level=level)
+        try:
+            BackupLog.objects.create(event=message, level=level)
+        except Exception:
+            pass # Failsafe if DB is not initialized
         self._update_progress(message)
 
     def _update_progress(self, message):
-        state, _ = BackupState.objects.get_or_create(id=1)
-        state.progress_message = message
-        state.save()
+        try:
+            state, _ = BackupState.objects.get_or_create(id=1)
+            state.progress_message = message
+            state.save()
+        except Exception:
+            pass
 
     def _get_drive_service(self):
         creds_obj = GoogleDriveCredentials.objects.first()
-        if not creds_obj:
-            raise Exception("No Google Drive credentials found.")
+        if not creds_obj or not creds_obj.get_token():
+            raise ValueError("No Google Drive credentials found or incomplete.")
         
         creds = Credentials(
             token=creds_obj.get_token(),
@@ -62,13 +73,16 @@ class BackupService:
         state, _ = BackupState.objects.get_or_create(id=1)
         state.status = 'BACKING_UP'
         state.save()
+        
+        temp_dir = self._get_temp_dir()
+        aes_key = self._derive_aes_key(settings.SECRET_KEY)
 
         try:
             self._log("Backup Started")
             
             # 1. Snapshot
             self._log("Creating Database Snapshot...")
-            snapshot_path = self.create_database_snapshot()
+            snapshot_path = self.create_database_snapshot(temp_dir)
             
             # 2. Compress
             self._log("Compressing Database...")
@@ -76,7 +90,7 @@ class BackupService:
             
             # 3. Encrypt
             self._log("Encrypting Backup (AES-256-GCM)...")
-            encrypted_path = self.encrypt_file(compressed_path)
+            encrypted_path = self.encrypt_file(compressed_path, aes_key)
             
             # 4. Checksum
             self._log("Generating SHA-256...")
@@ -99,14 +113,10 @@ class BackupService:
 
             # 6. Metadata
             self._log("Updating Metadata...")
-            self.update_metadata(service, folder_id, checksum, file_size)
+            self.update_metadata(service, folder_id, checksum, file_size, temp_dir)
 
             # 7. Cleanup
             self.maintain_history(service, history_folder_id)
-            
-            # Local cleanup
-            shutil.rmtree(self.temp_dir)
-            os.makedirs(self.temp_dir, exist_ok=True)
 
             self._log("Backup Successful", level="SUCCESS")
             state.status = 'IDLE'
@@ -122,12 +132,16 @@ class BackupService:
             state.status = 'IDLE'
             state.save()
             raise
+        finally:
+            # ALWAYS clean up /tmp
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def create_database_snapshot(self):
+    def create_database_snapshot(self, temp_dir):
         db_settings = settings.DATABASES['default']
         engine = db_settings['ENGINE']
         timestamp = int(time.time())
-        snapshot_path = os.path.join(self.temp_dir, f'snapshot_{timestamp}.db')
+        snapshot_path = os.path.join(temp_dir, f'snapshot_{timestamp}.db')
 
         if 'sqlite' in engine:
             db_name = db_settings['NAME']
@@ -145,12 +159,12 @@ class BackupService:
             os.environ['PGPASSWORD'] = db_settings['PASSWORD']
             cmd = [
                 'pg_dump',
-                '-h', db_settings['HOST'],
-                '-p', str(db_settings['PORT']),
-                '-U', db_settings['USER'],
+                '-h', db_settings.get('HOST', 'localhost'),
+                '-p', str(db_settings.get('PORT', '5432')),
+                '-U', db_settings.get('USER', 'postgres'),
                 '-F', 'c', # custom format
                 '-f', snapshot_path,
-                db_settings['NAME']
+                db_settings.get('NAME', 'postgres')
             ]
             subprocess.run(cmd, check=True)
         else:
@@ -164,9 +178,9 @@ class BackupService:
                 shutil.copyfileobj(f_in, f_out)
         return compressed_path
 
-    def encrypt_file(self, filepath):
+    def encrypt_file(self, filepath, aes_key):
         encrypted_path = f"{filepath}.enc"
-        aesgcm = AESGCM(self.aes_key)
+        aesgcm = AESGCM(aes_key)
         nonce = os.urandom(12)
         
         with open(filepath, 'rb') as f:
@@ -221,7 +235,7 @@ class BackupService:
         file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         return file.get('id')
 
-    def update_metadata(self, service, folder_id, checksum, file_size):
+    def update_metadata(self, service, folder_id, checksum, file_size, temp_dir):
         db_settings = settings.DATABASES['default']
         metadata = {
             "app_version": "1.0.0",
@@ -238,7 +252,7 @@ class BackupService:
             "created_by": "System",
             "encryption": "AES-256-GCM"
         }
-        meta_path = os.path.join(self.temp_dir, 'metadata.json')
+        meta_path = os.path.join(temp_dir, 'metadata.json')
         with open(meta_path, 'w') as f:
             json.dump(metadata, f, indent=4)
         
