@@ -241,7 +241,23 @@ def health_check(request):
     try:
         from django.db import connection
         tables = connection.introspection.table_names()
-        required_tables = ['backup_googledrivecredentials', 'backup_backupsettings', 'backup_backupstate', 'backup_backuplog']
+        health["tables_in_db"] = tables
+        
+        # Check applied migrations
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT app, name FROM django_migrations WHERE app = 'backup'")
+            applied_migrations = cursor.fetchall()
+            health["applied_migrations"] = [{"app": row[0], "name": row[1]} for row in applied_migrations]
+            
+        required_tables = [
+            GoogleDriveCredentials._meta.db_table,
+            BackupSettings._meta.db_table,
+            BackupState._meta.db_table,
+            BackupLog._meta.db_table
+        ]
+        
+        health["required_tables"] = required_tables
+
         for t in required_tables:
             if t not in tables:
                 missing_tables.append(t)
@@ -253,9 +269,9 @@ def health_check(request):
             health["backup_tables_exist"] = True
             health["migration_status"] = "Migrated"
         else:
-            health["migration_status"] = "Missing Tables"
+            health["migration_status"] = f"Missing {len(missing_tables)} tables. Ensure 'python manage.py migrate backup' has run successfully. Check your Vercel Build logs or run the migration command against the Neon DB."
     except Exception as e:
-        health["migration_status"] = str(e)
+        health["migration_status"] = f"Error checking tables: {str(e)}"
 
     if health["google_env"]["client_id"] and health["google_env"]["client_secret"] and health["google_env"]["redirect_uri"]:
         health["google_configured"] = True
