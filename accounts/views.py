@@ -285,10 +285,16 @@ def login_view(request):
     is_portal_admin = False
     try:
         if hasattr(user, 'profile'):
-            company_name = user.profile.company.name if user.profile.company else "Default Business"
-            role = user.profile.role
-            owner_name = user.profile.owner_name or user.first_name or user.username
-            is_portal_admin = user.profile.is_portal_admin
+            profile = user.profile
+            # Automatically designate the default 'admin' account as a portal admin
+            if user.username == 'admin' and not profile.is_portal_admin:
+                profile.is_portal_admin = True
+                profile.save()
+                
+            company_name = profile.company.name if profile.company else "Default Business"
+            role = profile.role
+            owner_name = profile.owner_name or user.first_name or user.username
+            is_portal_admin = profile.is_portal_admin
     except Exception:
         pass
 
