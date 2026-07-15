@@ -191,6 +191,7 @@ def register_view(request):
     email = request.data.get("email")
     phone = request.data.get("phone")
     password = request.data.get("password")
+    logo_base64 = request.data.get("logo_base64")
 
     if not business_name or not owner_name or not email or not phone or not password:
         return Response({"detail": "All fields are required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -205,7 +206,7 @@ def register_view(request):
 
     try:
         with transaction.atomic():
-            company = Company.objects.create(name=business_name)
+            company = Company.objects.create(name=business_name, logo_base64=logo_base64)
             user = User.objects.create(
                 username=email,
                 email=email,
@@ -317,13 +318,21 @@ def login_view(request):
     except Exception:
         pass
 
+    company_logo = None
+    try:
+        if hasattr(user, 'profile') and user.profile.company:
+            company_logo = user.profile.company.logo_base64
+    except Exception:
+        pass
+
     return Response({
         "username": user.username,
         "owner_name": owner_name,
         "is_staff": user.is_staff,
         "company_name": company_name,
         "role": role,
-        "is_portal_admin": is_portal_admin
+        "is_portal_admin": is_portal_admin,
+        "company_logo": company_logo
     })
 
 
@@ -403,13 +412,21 @@ def me_view(request):
             is_portal_admin = profile.is_portal_admin
     except Exception:
         pass
+    company_logo = None
+    try:
+        if hasattr(request.user, 'profile') and request.user.profile.company:
+            company_logo = request.user.profile.company.logo_base64
+    except Exception:
+        pass
+
     return Response({
         "username": request.user.username,
         "owner_name": owner_name,
         "is_staff": request.user.is_staff,
         "company_name": company_name,
         "role": role,
-        "is_portal_admin": is_portal_admin
+        "is_portal_admin": is_portal_admin,
+        "company_logo": company_logo
     })
 
 
@@ -557,12 +574,45 @@ def export_excel_view(request):
 def export_pdf_view(request):
     response = HttpResponse(content_type="application/pdf")
     response["Content-Disposition"] = 'attachment; filename="account-statement.pdf"'
+    
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    company_name = company.name if company else "LedgerPro"
+    
     pdf = canvas.Canvas(response, pagesize=A4)
     width, height = A4
-    y = height - 50
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(40, y, "Account Statement")
-    y -= 30
+    y = height - 55
+    
+    # Draw logo if exists
+    if company and company.logo_base64:
+        try:
+            import base64
+            from io import BytesIO
+            from reportlab.lib.utils import ImageReader
+            b64_data = company.logo_base64
+            if ',' in b64_data:
+                b64_data = b64_data.split(',', 1)[1]
+            img_data = base64.b64decode(b64_data)
+            img_file = BytesIO(img_data)
+            reader = ImageReader(img_file)
+            pdf.drawImage(reader, 40, y - 10, width=80, height=40, preserveAspectRatio=True, mask='auto')
+            pdf.setFont("Helvetica-Bold", 16)
+            pdf.drawString(130, y + 10, company_name)
+            pdf.setFont("Helvetica", 10)
+            pdf.drawString(130, y - 5, "Account Statement")
+            y -= 50
+        except Exception:
+            pdf.setFont("Helvetica-Bold", 16)
+            pdf.drawString(40, y, company_name)
+            pdf.setFont("Helvetica", 10)
+            pdf.drawString(40, y - 15, "Account Statement")
+            y -= 40
+    else:
+        pdf.setFont("Helvetica-Bold", 16)
+        pdf.drawString(40, y, company_name)
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(40, y - 15, "Account Statement")
+        y -= 40
+        
     pdf.setFont("Helvetica", 9)
     for tx in filtered_transactions(request):
         line = f"{tx.date} | {tx.transaction_type.upper()} | {tx.title} | {tx.category.name} | Rs {tx.amount}"
@@ -608,10 +658,16 @@ class SaleViewSet(viewsets.ModelViewSet):
 @api_view(["GET"])
 def export_sales_excel_view(request):
     company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    company_name = company.name if company else "LedgerPro"
+    
     qs = Sale.objects.filter(company=company).select_related("stock", "account").order_by("-date", "-created_at")
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sales Statement"
+    ws.title = company_name[:30]
+    try:
+        ws.HeaderFooter.oddHeader.left.text = company_name
+    except Exception:
+        pass
     ws.append(["Date", "Stock Item", "Quantity", "Sale Price (Rs)", "Total Price (Rs)", "Account", "Notes", "Customer Name", "Customer Phone", "Customer Address"])
     for sale in qs:
         ws.append([
@@ -636,6 +692,9 @@ def export_sales_excel_view(request):
 def export_sales_pdf_view(request):
     response = HttpResponse(content_type="application/pdf")
     response["Content-Disposition"] = 'attachment; filename="sales-statement.pdf"'
+    
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    company_name = company.name if company else "LedgerPro"
     
     doc = SimpleDocTemplate(
         response,
@@ -683,7 +742,35 @@ def export_sales_pdf_view(request):
         textColor=colors.white
     )
 
-    story.append(Paragraph("LedgerPro", title_style))
+    # Decode base64 logo if exists
+    logo_image = None
+    if company and company.logo_base64:
+        try:
+            import base64
+            from io import BytesIO
+            from reportlab.platypus import Image
+            b64_data = company.logo_base64
+            if ',' in b64_data:
+                b64_data = b64_data.split(',', 1)[1]
+            img_data = base64.b64decode(b64_data)
+            img_file = BytesIO(img_data)
+            logo_image = Image(img_file, width=80, height=40)
+        except Exception:
+            pass
+
+    header_table_data = []
+    if logo_image:
+        header_table_data.append([logo_image, Paragraph(company_name, title_style)])
+    else:
+        header_table_data.append([Paragraph(company_name, title_style)])
+        
+    header_table = Table(header_table_data, colWidths=[100, 400] if logo_image else [500])
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+    ]))
+    story.append(header_table)
+    
     story.append(Paragraph("Sales Ledger Statement - Generated on " + timezone.now().strftime("%Y-%m-%d %H:%M"), subtitle_style))
     story.append(Spacer(1, 10))
     
@@ -1109,6 +1196,8 @@ def safe_date(raw_date):
 @api_view(["GET"])
 def export_stock_excel_view(request):
     company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    company_name = company.name if company else "LedgerPro"
+    
     stock_qs = Stock.objects.filter(company=company).annotate(
         sold_stock=Coalesce(Sum("sales__quantity"), Value(0)),
         remaining_stock=F("quantity") - Coalesce(Sum("sales__quantity"), Value(0))
@@ -1116,7 +1205,11 @@ def export_stock_excel_view(request):
     
     wb = Workbook()
     ws = wb.active
-    ws.title = "Stock Inventory"
+    ws.title = company_name[:30]
+    try:
+        ws.HeaderFooter.oddHeader.left.text = company_name
+    except Exception:
+        pass
     ws.append(["Item Name", "Unit Price (Rs)", "Total Stock", "Sold Stock", "Remaining Stock", "Value (Remaining)"])
     
     for item in stock_qs:
@@ -1141,6 +1234,9 @@ def export_stock_excel_view(request):
 def export_stock_pdf_view(request):
     response = HttpResponse(content_type="application/pdf")
     response["Content-Disposition"] = 'attachment; filename="stock-inventory.pdf"'
+    
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    company_name = company.name if company else "LedgerPro"
     
     doc = SimpleDocTemplate(
         response,
@@ -1188,7 +1284,35 @@ def export_stock_pdf_view(request):
         textColor=colors.white
     )
 
-    story.append(Paragraph("LedgerPro", title_style))
+    # Decode base64 logo if exists
+    logo_image = None
+    if company and company.logo_base64:
+        try:
+            import base64
+            from io import BytesIO
+            from reportlab.platypus import Image
+            b64_data = company.logo_base64
+            if ',' in b64_data:
+                b64_data = b64_data.split(',', 1)[1]
+            img_data = base64.b64decode(b64_data)
+            img_file = BytesIO(img_data)
+            logo_image = Image(img_file, width=80, height=40)
+        except Exception:
+            pass
+
+    header_table_data = []
+    if logo_image:
+        header_table_data.append([logo_image, Paragraph(company_name, title_style)])
+    else:
+        header_table_data.append([Paragraph(company_name, title_style)])
+        
+    header_table = Table(header_table_data, colWidths=[100, 400] if logo_image else [500])
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+    ]))
+    story.append(header_table)
+    
     story.append(Paragraph("Stock Inventory Statement - Generated on " + timezone.now().strftime("%Y-%m-%d %H:%M"), subtitle_style))
     story.append(Spacer(1, 10))
     

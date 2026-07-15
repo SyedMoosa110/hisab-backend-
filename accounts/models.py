@@ -14,6 +14,7 @@ class TimeStampedModel(models.Model):
 class Company(TimeStampedModel):
     name = models.CharField(max_length=255, unique=True)
     is_upgraded = models.BooleanField(default=False)
+    logo_base64 = models.TextField(null=True, blank=True)
 
     def __str__(self):
         return self.name
