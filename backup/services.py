@@ -17,9 +17,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 class BackupService:
-    def __init__(self, device_id=None):
+    def __init__(self, user):
         self.device_name = os.environ.get('COMPUTERNAME', 'Unknown Device')
-        self.device_id = device_id
+        self.user = user
 
     def _derive_aes_key(self, secret):
         salt = b"backup_salt_123"
@@ -38,54 +38,45 @@ class BackupService:
 
     def _log(self, message, level='INFO'):
         try:
-            BackupLog.objects.create(event=message, level=level)
+            BackupLog.objects.create(user=self.user, event=message, level=level)
         except Exception:
             pass # Failsafe if DB is not initialized
         self._update_progress(message)
 
     def _update_progress(self, message):
         try:
-            state, _ = BackupState.objects.get_or_create(id=1)
+            state, _ = BackupState.objects.get_or_create(user=self.user)
             state.progress_message = message
             state.save()
         except Exception:
             pass
 
-    def _get_drive_services(self):
-        if self.device_id:
-            creds_qs = GoogleDriveCredentials.objects.filter(device_id=self.device_id)
-        else:
-            creds_qs = GoogleDriveCredentials.objects.all()
+    def _get_drive_service(self):
+        try:
+            creds_obj = self.user.google_drive_credentials
+        except GoogleDriveCredentials.DoesNotExist:
+            raise ValueError("No valid Google Drive credentials found for this user.")
             
-        services = []
-        for creds_obj in creds_qs:
-            access_token = creds_obj.get_token()
-            if access_token:
-                refresh_token = creds_obj.get_refresh_token()
-                
-                print(f"[Drive Service DEBUG] access_token type: {type(access_token)}")
-                print(f"[Drive Service DEBUG] refresh_token type: {type(refresh_token)}")
-                print(f"[Drive Service DEBUG] access_token repr: {repr(access_token)}")
-                
-                if not isinstance(access_token, str) or not isinstance(refresh_token, str):
-                    raise TypeError(f"Decrypted tokens must be strings! Access Token: {type(access_token)}, Refresh Token: {type(refresh_token)}")
+        access_token = creds_obj.get_token()
+        if not access_token:
+            raise ValueError("Google Drive access token not found.")
+            
+        refresh_token = creds_obj.get_refresh_token()
+        
+        if not isinstance(access_token, str) or not isinstance(refresh_token, str):
+            raise TypeError(f"Decrypted tokens must be strings! Access Token: {type(access_token)}, Refresh Token: {type(refresh_token)}")
 
-                creds = Credentials(
-                    token=access_token,
-                    refresh_token=refresh_token,
-                    client_id=creds_obj.client_id,
-                    client_secret=creds_obj.client_secret,
-                    token_uri=creds_obj.token_uri
-                )
-                print(f"[Drive Service DEBUG] Credentials.token type: {type(creds.token)}")
-                services.append(build('drive', 'v3', credentials=creds))
-                
-        if not services:
-            raise ValueError("No valid Google Drive credentials found.")
-        return services
+        creds = Credentials(
+            token=access_token,
+            refresh_token=refresh_token,
+            client_id=creds_obj.client_id,
+            client_secret=creds_obj.client_secret,
+            token_uri=creds_obj.token_uri
+        )
+        return build('drive', 'v3', credentials=creds)
 
     def run_backup(self):
-        state, _ = BackupState.objects.get_or_create(id=1)
+        state, _ = BackupState.objects.get_or_create(user=self.user)
         state.status = 'BACKING_UP'
         state.save()
         
@@ -114,33 +105,32 @@ class BackupService:
             
             # 5. Upload
             self._log("Uploading to Google Drive...")
-            services = self._get_drive_services()
+            service = self._get_drive_service()
             
-            for service in services:
-                folder_id = self._get_or_create_folder(service, 'Business Accounting Backup')
-                history_folder_id = self._get_or_create_folder(service, 'history', parent_id=folder_id)
+            folder_id = self._get_or_create_folder(service, 'Business Accounting Backup')
+            history_folder_id = self._get_or_create_folder(service, 'history', parent_id=folder_id)
 
-                filename = f"{datetime.now().strftime('%Y-%m-%d-%H%M')}.enc"
-                
-                # Upload to history
-                self._upload_file(service, encrypted_path, filename, history_folder_id)
-                
-                # Update latest.enc
-                self._upload_file(service, encrypted_path, 'latest.enc', folder_id, overwrite=True)
+            filename = f"{datetime.now().strftime('%Y-%m-%d-%H%M')}.enc"
+            
+            # Upload to history
+            self._upload_file(service, encrypted_path, filename, history_folder_id)
+            
+            # Update latest.enc
+            self._upload_file(service, encrypted_path, 'latest.enc', folder_id, overwrite=True)
 
-                # 6. Metadata
-                self._log("Updating Metadata...")
-                self.update_metadata(service, folder_id, checksum, file_size, temp_dir)
+            # 6. Metadata
+            self._log("Updating Metadata...")
+            self.update_metadata(service, folder_id, checksum, file_size, temp_dir)
 
-                # 7. Cleanup
-                self.maintain_history(service, history_folder_id)
+            # 7. Cleanup
+            self.maintain_history(service, history_folder_id)
 
             self._log("Backup Successful", level="SUCCESS")
             state.status = 'IDLE'
             state.is_dirty = False
             state.save()
 
-            settings_obj, _ = BackupSettings.objects.get_or_create(id=1)
+            settings_obj, _ = BackupSettings.objects.get_or_create(user=self.user)
             settings_obj.last_backup_date = datetime.now()
             settings_obj.save()
 
@@ -212,7 +202,7 @@ class BackupService:
     def generate_sha256(self, filepath):
         sha256_hash = hashlib.sha256()
         with open(filepath, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096),b""):
+            for byte_block in iter(lambda: f.read(4096), b""):
                 sha256_hash.update(byte_block)
         return sha256_hash.hexdigest()
 
@@ -262,7 +252,7 @@ class BackupService:
             "last_modified": datetime.now().isoformat(),
             "device_name": self.device_name,
             "device_id": "device-001",
-            "google_account_email": "",
+            "google_account_email": self.user.google_drive_credentials.email,
             "sha256_checksum": checksum,
             "backup_status": "SUCCESS",
             "created_by": "System",
@@ -312,7 +302,6 @@ class BackupService:
 
     def run_restore(self, company_id):
         import time
-        from django.apps import apps
         from django.db import transaction
         from accounts.models import Sale, Transaction, DuePayment, Stock, Note, AuditLog, Category, Party, Account
 
@@ -332,7 +321,7 @@ class BackupService:
         
         temp_dir = self._get_temp_dir()
         aes_key = self._derive_aes_key(settings.SECRET_KEY)
-        service = self._get_drive_services()[0]
+        service = self._get_drive_service()
         
         try:
             folder_id = self._get_or_create_folder(service, 'Business Accounting Backup')
@@ -373,9 +362,14 @@ class BackupService:
                 
             t = log_stage("Metadata verified", t)
             required_keys = ['sha256_checksum', 'version', 'encryption', 'timestamp']
-            for k in required_keys:
-                if k not in meta_json:
-                    raise ValueError(f"Missing required metadata field: {k}")
+            
+            # Wait, our metadata generated has "backup_version", not "version" - let's make sure both are supported
+            # to prevent validation crashes.
+            version_val = meta_json.get('version') or meta_json.get('backup_version')
+            if not version_val:
+                raise ValueError("Missing required metadata field: version")
+            if 'sha256_checksum' not in meta_json or 'encryption' not in meta_json or 'backup_timestamp' not in meta_json:
+                raise ValueError("Missing required metadata fields.")
             
             if meta_json.get('encryption') != 'AES-256-GCM':
                 raise ValueError("Unsupported encryption algorithm in metadata.")
@@ -445,7 +439,7 @@ class BackupService:
                 error_trace = traceback.format_exc()
                 self._log(f"Restore Failed during database transaction: {str(e)}", level="ERROR")
                 self._log(error_trace, level="ERROR")
-                raise ValueError(f"Database import failed: {str(e)}\n\nTraceback:\n{error_trace}")
+                raise ValueError(f"Database import failed: {str(e)}")
                 
             t = log_stage("Restore completed", t)
             self._log("Restore Successful", level="SUCCESS")

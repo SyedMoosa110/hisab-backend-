@@ -22,7 +22,6 @@ def api_error_handler(func):
         try:
             return func(request, *args, **kwargs)
         except (ProgrammingError, OperationalError) as e:
-            # Handle database tables missing gracefully
             error_msg = "Database tables missing. Please run migrations."
             return Response({
                 'success': False, 
@@ -30,7 +29,6 @@ def api_error_handler(func):
                 'details': str(e)
             }, status=200)
         except ValueError as e:
-            # Handle configuration issues
             return Response({
                 'success': False,
                 'error': str(e)
@@ -79,7 +77,7 @@ def get_flow():
     return flow, missing
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 @api_error_handler
 def get_auth_url(request):
     flow, missing = get_flow()
@@ -94,12 +92,10 @@ def get_auth_url(request):
     auth_url, state = flow.authorization_url(prompt='consent', access_type='offline')
     request.session['oauth_state'] = state
     request.session['device_id'] = request.headers.get('X-Device-Id', 'default-device')
+    request.session['user_id'] = request.user.id
     
     if hasattr(flow, 'code_verifier'):
         request.session['code_verifier'] = flow.code_verifier
-        print(f"[OAuth DEBUG] PKCE is ENABLED. Generated code_verifier (length: {len(flow.code_verifier)})")
-    else:
-        print("[OAuth DEBUG] PKCE is NOT enabled for this flow.")
         
     request.session.modified = True
 
@@ -108,177 +104,133 @@ def get_auth_url(request):
         "configured": True,
         "auth_url": auth_url
     }, status=200)
+
 from django.http import HttpResponseRedirect
 
 def auth_callback(request):
-    print("[OAuth] Callback entered")
-    print(request.GET)
-    
     # Hardcode for testing as requested
     frontend_url = "https://hisab-frontend-fawn.vercel.app"
     
+    # Resolve user
+    user = None
+    if request.user.is_authenticated:
+        user = request.user
+    else:
+        user_id = request.session.get('user_id')
+        if user_id:
+            from django.contrib.auth.models import User
+            try:
+                user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                pass
+                
+    if not user:
+        return HttpResponseRedirect(f"{frontend_url}/?connected=false&error=unauthenticated")
+
     error = request.GET.get('error')
     if error:
-        redirect_url = f"{frontend_url}/?connected=false&error={error}"
-        print("[OAuth] Final redirect:", redirect_url)
-        return HttpResponseRedirect(redirect_url)
+        return HttpResponseRedirect(f"{frontend_url}/?connected=false&error={error}")
 
     authorization_code = request.GET.get('code')
-    state = request.GET.get('state')
-    
-    print("Code:", authorization_code)
-    print("State:", state)
-    
     if not authorization_code:
-        redirect_url = f"{frontend_url}/?connected=false&error=missing_code"
-        print("[OAuth] Final redirect:", redirect_url)
-        return HttpResponseRedirect(redirect_url)
+        return HttpResponseRedirect(f"{frontend_url}/?connected=false&error=missing_code")
     
     flow, missing = get_flow()
     if missing:
-        redirect_url = f"{frontend_url}/?connected=false&error=server_missing_config"
-        print("[OAuth] Final redirect:", redirect_url)
-        return HttpResponseRedirect(redirect_url)
+        return HttpResponseRedirect(f"{frontend_url}/?connected=false&error=server_missing_config")
         
-    # Restore PKCE code verifier and state
-    session_state = request.session.get('oauth_state')
     code_verifier = request.session.get('code_verifier')
-    
     if code_verifier:
         flow.code_verifier = code_verifier
-        print(f"[OAuth DEBUG] Restored code_verifier from session (length: {len(code_verifier)})")
-    else:
-        print("[OAuth DEBUG] No code_verifier found in session during callback.")
         
-    print("[OAuth DEBUG] Starting token exchange...")
     try:
         flow.fetch_token(code=authorization_code)
-        print("[OAuth DEBUG] Token exchange successful.")
     except Exception as e:
-        print(f"[OAuth DEBUG] fetch_token failed: {str(e)}")
-        redirect_url = f"{frontend_url}/?connected=false&error=token_exchange_failed"
-        print("[OAuth] Final redirect:", redirect_url)
-        return HttpResponseRedirect(redirect_url)
+        return HttpResponseRedirect(f"{frontend_url}/?connected=false&error=token_exchange_failed")
         
     try:
         credentials = flow.credentials
-        print(f"[OAuth DEBUG] Refresh token received? {bool(credentials.refresh_token)}")
-        print(f"[OAuth DEBUG] Access token received? {bool(credentials.token)}")
-        
-        # Get user email
         drive_service = build('drive', 'v3', credentials=credentials)
         about = drive_service.about().get(fields='user').execute()
         email = about['user']['emailAddress']
 
-        print("[OAuth DEBUG] Saving credentials...")
-        # Save credentials
-        device_id = request.session.get('device_id', 'default-device')
-        creds_obj, _ = GoogleDriveCredentials.objects.get_or_create(device_id=device_id)
+        # Get or create credentials specifically for this user
+        creds_obj, _ = GoogleDriveCredentials.objects.get_or_create(user=user)
         creds_obj.client_id = flow.client_config['client_id']
         creds_obj.client_secret = flow.client_config['client_secret']
         creds_obj.token_uri = flow.client_config['token_uri']
         creds_obj.scopes = ",".join(SCOPES)
         creds_obj.email = email
+        creds_obj.device_id = request.session.get('device_id', 'default-device')
         creds_obj.save_tokens(credentials.token, credentials.refresh_token)
-        print("[OAuth DEBUG] Credentials saved.")
 
-        BackupLog.objects.create(event=f"Google Drive Connected: {email}", level="SUCCESS")
-
-        print("[OAuth DEBUG] Database commit complete.")
+        BackupLog.objects.create(user=user, event=f"Google Drive Connected: {email}", level="SUCCESS")
     except Exception as e:
-        print(f"[OAuth DEBUG] Error saving credentials or fetching email: {str(e)}")
-        redirect_url = f"{frontend_url}/?connected=false&error=database_save_failed"
-        print("[OAuth] Final redirect:", redirect_url)
-        return HttpResponseRedirect(redirect_url)
+        return HttpResponseRedirect(f"{frontend_url}/?connected=false&error=database_save_failed")
         
-    redirect_url = f"{frontend_url}/?connected=true"
-    print("[OAuth] Final redirect:", redirect_url)
-    return HttpResponseRedirect(redirect_url)
+    return HttpResponseRedirect(f"{frontend_url}/?connected=true")
 
 import logging
 logger = logging.getLogger(__name__)
 
 @api_view(['POST'])
-@authentication_classes([])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def disconnect(request):
-    step = "init"
     try:
-        print("[Disconnect] Disconnect called")
-        
-        step = "db_lookup"
-        print("[Disconnect] Credentials found?")
-        device_id = request.headers.get('X-Device-Id', 'default-device')
-        creds = GoogleDriveCredentials.objects.filter(device_id=device_id).first()
+        creds = GoogleDriveCredentials.objects.filter(user=request.user).first()
         if not creds:
-            print("[Disconnect] No credentials found.")
             return Response({
                 "success": True,
                 "connected": False,
                 "message": "Already disconnected"
             })
             
-        step = "get_token"
-        print("[Disconnect] Refresh token exists?")
+        token = None
         try:
             token = creds.get_token()
-            print(f"[Disconnect] Token extracted: {bool(token)}")
-        except Exception as e:
-            print(f"[Disconnect] Failed to get token (ignoring): {e}")
+        except Exception:
             token = None
             
         if token:
-            step = "revoke_token"
-            print("[Disconnect] Calling revoke endpoint...")
             try:
                 import requests
                 requests.post('https://oauth2.googleapis.com/revoke',
                     params={'token': token},
                     headers={'content-type': 'application/x-www-form-urlencoded'}
                 )
-            except Exception as e:
-                print(f"[Disconnect] Token revocation failed (ignoring): {e}")
+            except Exception:
+                pass
                 
-        step = "delete_credentials"
-        print("[Disconnect] Deleting credentials...")
         creds.delete()
         
-        step = "clear_session"
-        print("[Disconnect] Clearing session...")
         if hasattr(request, 'session'):
             request.session.pop('oauth_state', None)
             request.session.pop('code_verifier', None)
+            request.session.pop('user_id', None)
             request.session.modified = True
             
-        step = "write_log"
-        print("[Disconnect] Database commit successful...")
-        BackupLog.objects.create(event="Google Drive Disconnected", level="INFO")
+        BackupLog.objects.create(user=request.user, event="Google Drive Disconnected", level="INFO")
         
-        step = "return_success"
-        print("[Disconnect] Returning success...")
         return Response({
             "success": True,
             "message": "Google Drive disconnected successfully."
         })
     except Exception as e:
         import traceback
-        logger.exception(f"Disconnect failed at step: {step}")
+        logger.exception("Disconnect failed")
         return Response({
             "success": False,
-            "step": step,
-            "exception_type": type(e).__name__,
             "error": str(e),
             "traceback": traceback.format_exc()
         }, status=200)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 @api_error_handler
 def get_status(request):
-    device_id = request.headers.get('X-Device-Id', 'default-device')
-    creds = GoogleDriveCredentials.objects.filter(device_id=device_id).first()
-    settings_obj = BackupSettings.objects.filter(device_id=device_id).first()
-    state = BackupState.objects.first()
+    creds = GoogleDriveCredentials.objects.filter(user=request.user).first()
+    settings_obj, _ = BackupSettings.objects.get_or_create(user=request.user)
+    state, _ = BackupState.objects.get_or_create(user=request.user)
 
     status = {
         'connected': creds is not None,
@@ -293,21 +245,20 @@ def get_status(request):
     return Response(status)
 
 @api_view(['POST'])
-@authentication_classes([])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 @api_error_handler
 def trigger_backup(request):
-    device_id = request.headers.get('X-Device-Id', 'default-device')
-    trigger_manual_backup(device_id=device_id)
+    trigger_manual_backup(request.user)
     return Response({'success': True, 'message': 'Backup completed successfully.'})
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 @api_error_handler
 def list_history(request):
-    service = BackupService()._get_drive_service()
-    folder_id = BackupService()._get_or_create_folder(service, 'Business Accounting Backup')
-    history_folder_id = BackupService()._get_or_create_folder(service, 'history', parent_id=folder_id)
+    backup_service = BackupService(user=request.user)
+    service = backup_service._get_drive_service()
+    folder_id = backup_service._get_or_create_folder(service, 'Business Accounting Backup')
+    history_folder_id = backup_service._get_or_create_folder(service, 'history', parent_id=folder_id)
     
     query = f"'{history_folder_id}' in parents and trashed=false"
     results = service.files().list(q=query, spaces='drive', fields='files(id, name, createdTime, size)', orderBy='createdTime desc').execute()
@@ -315,28 +266,22 @@ def list_history(request):
     return Response({'files': results.get('files', [])})
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 @api_error_handler
 def get_logs(request):
-    logs = BackupLog.objects.all().order_by('-timestamp')[:50]
+    logs = BackupLog.objects.filter(user=request.user).order_by('-timestamp')[:50]
     return Response({'logs': [{'timestamp': l.timestamp, 'event': l.event, 'level': l.level} for l in logs]})
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 @api_error_handler
 def restore_backup(request):
-    if not request.user.is_authenticated:
-        return Response({'success': False, 'error': 'Authentication required to restore.'}, status=401)
-        
     try:
         company_id = request.user.profile.company_id
         if not company_id:
             return Response({'success': False, 'error': 'No company associated with user.'}, status=400)
             
-        device_id = request.headers.get('X-Device-Id', 'default-device')
-        service = BackupService(device_id=device_id)
-        
-        # We need to run it synchronously so the API can respond with success
+        service = BackupService(user=request.user)
         service.run_restore(company_id)
         
         return Response({
@@ -396,14 +341,7 @@ def health_check(request):
     try:
         from django.db import connection
         tables = connection.introspection.table_names()
-        health["tables_in_db"] = tables
         
-        # Check applied migrations
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT app, name FROM django_migrations WHERE app = 'backup'")
-            applied_migrations = cursor.fetchall()
-            health["applied_migrations"] = [{"app": row[0], "name": row[1]} for row in applied_migrations]
-            
         required_tables = [
             GoogleDriveCredentials._meta.db_table,
             BackupSettings._meta.db_table,
@@ -411,8 +349,6 @@ def health_check(request):
             BackupLog._meta.db_table
         ]
         
-        health["required_tables"] = required_tables
-
         for t in required_tables:
             if t not in tables:
                 missing_tables.append(t)
@@ -420,11 +356,10 @@ def health_check(request):
         health["missing_tables"] = missing_tables
         
         if not missing_tables:
-            BackupState.objects.first()
             health["backup_tables_exist"] = True
             health["migration_status"] = "Migrated"
         else:
-            health["migration_status"] = f"Missing {len(missing_tables)} tables. Ensure 'python manage.py migrate backup' has run successfully. Check your Vercel Build logs or run the migration command against the Neon DB."
+            health["migration_status"] = f"Missing {len(missing_tables)} tables."
     except Exception as e:
         health["migration_status"] = f"Error checking tables: {str(e)}"
 
@@ -432,10 +367,10 @@ def health_check(request):
         health["google_configured"] = True
 
     try:
-        device_id = request.headers.get('X-Device-Id', 'default-device')
-        creds = GoogleDriveCredentials.objects.filter(device_id=device_id).first()
-        if creds and creds.get_token():
-            health["credentials_valid"] = True
+        if request.user.is_authenticated:
+            creds = GoogleDriveCredentials.objects.filter(user=request.user).first()
+            if creds and creds.get_token():
+                health["credentials_valid"] = True
     except Exception:
         pass
 

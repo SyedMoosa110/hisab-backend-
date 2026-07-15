@@ -7,36 +7,43 @@ logger = logging.getLogger(__name__)
 def check_and_run_backup():
     """
     Called by the /api/backup/cron/ endpoint.
-    Executes a backup synchronously if the dirty debounce time has passed.
+    Loops through all users with auto-backup enabled and runs backups if the debounce period has met.
     """
-    from backup.models import BackupState, BackupSettings
+    from backup.models import BackupSettings, BackupState
     from backup.services import BackupService
 
     try:
-        settings_obj = BackupSettings.objects.first()
-        if settings_obj and not settings_obj.auto_backup_enabled:
-            return False, "Auto-backup disabled"
+        settings_objs = BackupSettings.objects.filter(auto_backup_enabled=True)
+        ran_any = False
+        messages = []
 
-        state = BackupState.objects.first()
-        if not state:
-            return False, "No backup state found"
+        for settings_obj in settings_objs:
+            user = settings_obj.user
+            try:
+                state, _ = BackupState.objects.get_or_create(user=user)
+                if state.is_dirty and state.status == 'IDLE':
+                    # Check 60-second debounce
+                    time_since_modified = timezone.now() - state.last_modified
+                    if time_since_modified >= timedelta(seconds=60):
+                        service = BackupService(user=user)
+                        service.run_backup()
+                        ran_any = True
+                        messages.append(f"Auto-backup completed for user {user.username}")
+                    else:
+                        messages.append(f"Debounce period not met for user {user.username}")
+            except Exception as e:
+                logger.error(f"Cron auto-backup error for user {user.username}: {e}")
+                messages.append(f"Error for user {user.username}: {str(e)}")
 
-        if state.is_dirty and state.status == 'IDLE':
-            # Check 60-second debounce
-            time_since_modified = timezone.now() - state.last_modified
-            if time_since_modified >= timedelta(seconds=60):
-                # Debounce passed, run backup synchronously for Vercel Cron
-                service = BackupService()
-                service.run_backup()
-                return True, "Auto-backup completed"
-            else:
-                return False, "Debounce period not met"
-        return False, "No pending backups"
+        if not messages:
+            return False, "No users have pending auto-backups."
+        return ran_any, "; ".join(messages)
+
     except Exception as e:
-        logger.error(f"Cron auto-backup error: {e}")
+        logger.error(f"Cron auto-backup failure: {e}")
         raise e
 
-def trigger_manual_backup(device_id=None):
+def trigger_manual_backup(user):
     """
     Called by the /api/backup/trigger/ endpoint.
     Executes a backup synchronously.
@@ -44,12 +51,12 @@ def trigger_manual_backup(device_id=None):
     from backup.services import BackupService
     from backup.models import BackupState
     
-    state, _ = BackupState.objects.get_or_create(id=1)
+    state, _ = BackupState.objects.get_or_create(user=user)
     if state.status != 'IDLE':
         raise Exception("Backup is already in progress.")
         
     try:
-        BackupService(device_id=device_id).run_backup()
+        BackupService(user=user).run_backup()
     except Exception as e:
-        logger.error(f"Manual backup failed: {e}")
+        logger.error(f"Manual backup failed for user {user.username}: {e}")
         raise e

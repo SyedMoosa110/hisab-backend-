@@ -16,6 +16,11 @@ def get_encryption_key():
     return key.encode('utf-8')
 
 class GoogleDriveCredentials(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="google_drive_credentials"
+    )
     # Encrypted fields
     token = models.BinaryField()
     refresh_token = models.BinaryField()
@@ -53,18 +58,34 @@ class GoogleDriveCredentials(models.Model):
         return self.decrypt_val(self.refresh_token)
 
 class BackupSettings(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="backup_settings"
+    )
     auto_backup_enabled = models.BooleanField(default=True)
     last_backup_date = models.DateTimeField(null=True, blank=True)
     next_scheduled_backup = models.DateTimeField(null=True, blank=True)
     device_id = models.CharField(max_length=100, default='default-device')
 
 class BackupState(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="backup_state"
+    )
     is_dirty = models.BooleanField(default=False)
     last_modified = models.DateTimeField(auto_now=True)
     status = models.CharField(max_length=50, default='IDLE') # IDLE, BACKING_UP, UPLOADING, QUEUED_OFFLINE
     progress_message = models.CharField(max_length=255, default='')
 
 class BackupLog(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="backup_logs",
+        null=True, blank=True
+    )
     timestamp = models.DateTimeField(auto_now_add=True)
     event = models.CharField(max_length=255)
     level = models.CharField(max_length=20, default='INFO') # INFO, ERROR, SUCCESS
