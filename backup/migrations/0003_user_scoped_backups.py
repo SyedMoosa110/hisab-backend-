@@ -3,8 +3,7 @@ import django.db.models.deletion
 from django.conf import settings
 
 def link_existing_to_first_user(apps, schema_editor):
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
+    User = apps.get_model('auth', 'User')
     first_user = User.objects.first()
     
     GoogleDriveCredentials = apps.get_model('backup', 'GoogleDriveCredentials')
