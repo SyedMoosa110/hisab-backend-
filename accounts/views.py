@@ -260,7 +260,11 @@ def login_view(request):
         if hasattr(user, 'profile'):
             profile = user.profile
         else:
-            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile, created = UserProfile.objects.get_or_create(user=user)
+            if created:
+                from datetime import date, timedelta
+                profile.trial_expiry_date = date.today() + timedelta(days=90)
+                profile.save()
 
         if profile:
             if profile.is_blocked:
@@ -271,7 +275,8 @@ def login_view(request):
                 if company and not company.is_upgraded:
                     from django.utils import timezone
                     from datetime import timedelta
-                    if timezone.now() - profile.created_at > timedelta(days=90):
+                    expiry = profile.trial_expiry_date or (profile.created_at.date() + timedelta(days=90))
+                    if timezone.now().date() > expiry:
                         return Response({
                             "detail": "Your 3-month trial period has expired. Please contact NMZ Associates to upgrade your account."
                         }, status=status.HTTP_403_FORBIDDEN)
@@ -293,7 +298,11 @@ def login_view(request):
         if hasattr(user, 'profile'):
             profile = user.profile
         else:
-            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile, created = UserProfile.objects.get_or_create(user=user)
+            if created:
+                from datetime import date, timedelta
+                profile.trial_expiry_date = date.today() + timedelta(days=90)
+                profile.save()
 
         if profile:
             # Automatically designate the default 'admin' and 'moosa' accounts as portal admins (case-insensitive)
@@ -342,7 +351,11 @@ def me_view(request):
         if hasattr(request.user, 'profile'):
             profile = request.user.profile
         else:
-            profile, _ = UserProfile.objects.get_or_create(user=request.user)
+            profile, created = UserProfile.objects.get_or_create(user=request.user)
+            if created:
+                from datetime import date, timedelta
+                profile.trial_expiry_date = date.today() + timedelta(days=90)
+                profile.save()
 
         if profile:
             if profile.is_blocked:
@@ -354,7 +367,8 @@ def me_view(request):
                 if company and not company.is_upgraded:
                     from django.utils import timezone
                     from datetime import timedelta
-                    if timezone.now() - profile.created_at > timedelta(days=90):
+                    expiry = profile.trial_expiry_date or (profile.created_at.date() + timedelta(days=90))
+                    if timezone.now().date() > expiry:
                         logout(request)
                         return Response({
                             "detail": "Your 3-month trial period has expired. Please contact NMZ Associates to upgrade your account."
@@ -371,7 +385,11 @@ def me_view(request):
         if hasattr(request.user, 'profile'):
             profile = request.user.profile
         else:
-            profile, _ = UserProfile.objects.get_or_create(user=request.user)
+            profile, created = UserProfile.objects.get_or_create(user=request.user)
+            if created:
+                from datetime import date, timedelta
+                profile.trial_expiry_date = date.today() + timedelta(days=90)
+                profile.save()
 
         if profile:
             # Automatically designate 'admin' and 'moosa' accounts as portal admins (case-insensitive)
@@ -1365,8 +1383,9 @@ def superadmin_users_view(request):
         
         # Determine trial status
         is_expired = False
+        expiry = p.trial_expiry_date or (p.created_at.date() + timedelta(days=90))
         if not p.is_portal_admin and company and not is_upgraded:
-            is_expired = timezone.now() - p.created_at > timedelta(days=90)
+            is_expired = timezone.now().date() > expiry
             
         data.append({
             "id": p.id,
@@ -1375,6 +1394,7 @@ def superadmin_users_view(request):
             "business_name": p.business_name or (company.name if company else ""),
             "phone": p.phone,
             "joining_date": p.created_at.isoformat(),
+            "trial_expiry_date": p.trial_expiry_date.isoformat() if p.trial_expiry_date else expiry.isoformat(),
             "is_upgraded": is_upgraded,
             "is_blocked": p.is_blocked,
             "is_expired": is_expired,
@@ -1434,6 +1454,44 @@ def superadmin_toggle_upgrade_view(request, profile_id):
             "success": True,
             "is_upgraded": company.is_upgraded,
             "message": f"Company plan {'upgraded to Premium' if company.is_upgraded else 'downgraded to Free Trial'} successfully."
+        })
+    except UserProfile.DoesNotExist:
+        return Response({"detail": "User not found."}, status=404)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def superadmin_set_expiry_view(request, profile_id):
+    try:
+        profile = request.user.profile
+    except Exception:
+        return Response({"detail": "Profile not found."}, status=403)
+        
+    if not profile.is_portal_admin:
+        return Response({"detail": "Access denied."}, status=403)
+        
+    expiry_date_str = request.data.get("expiry_date")
+    if not expiry_date_str:
+        return Response({"detail": "Missing expiry_date field."}, status=400)
+        
+    try:
+        from datetime import datetime
+        expiry_date = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return Response({"detail": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+        
+    try:
+        target_profile = UserProfile.objects.get(id=profile_id)
+        if target_profile.is_portal_admin:
+            return Response({"detail": "Cannot modify superadmin trial expiry."}, status=400)
+            
+        target_profile.trial_expiry_date = expiry_date
+        target_profile.save()
+        
+        return Response({
+            "success": True,
+            "trial_expiry_date": target_profile.trial_expiry_date.isoformat(),
+            "message": f"Trial expiry date updated to {target_profile.trial_expiry_date} successfully."
         })
     except UserProfile.DoesNotExist:
         return Response({"detail": "User not found."}, status=404)

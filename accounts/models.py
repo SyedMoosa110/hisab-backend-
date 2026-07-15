@@ -263,6 +263,7 @@ class UserProfile(TimeStampedModel):
     # Superadmin portal tracking
     is_portal_admin = models.BooleanField(default=False)
     is_blocked = models.BooleanField(default=False)
+    trial_expiry_date = models.DateField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.user.username} - {self.company.name if self.company else 'No Company'} ({self.role})"
