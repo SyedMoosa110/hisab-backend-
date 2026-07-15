@@ -1633,22 +1633,31 @@ def superadmin_set_expiry_view(request, profile_id):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def test_error_view(request):
-    from accounts.models import Company, UserProfile, Category, Account, Party
     import traceback
     try:
-        companies = list(Company.objects.all().values("id", "name"))
-        profiles = list(UserProfile.objects.all().values("id", "user__username", "company_id"))
-        categories = list(Category.objects.all().values("id", "name", "company_id"))
-        accounts = list(Account.objects.all().values("id", "name", "company_id"))
-        parties = list(Party.objects.all().values("id", "name", "company_id"))
+        from accounts.models import Transaction, Category, Account, Party
+        from datetime import date
         
-        return Response({
-            "companies": companies,
-            "profiles": profiles,
-            "categories": categories,
-            "accounts": accounts,
-            "parties": parties,
-        })
+        category = Category.objects.get(id=9)
+        account = Account.objects.get(id=12)
+        party = Party.objects.get(id=11)
+        
+        from django.db import transaction as db_transaction
+        with db_transaction.atomic():
+            tx = Transaction.objects.create(
+                company=category.company,
+                transaction_type="income",
+                title="Mock Transaction Save test",
+                category=category,
+                account=account,
+                party=party,
+                amount=100.00,
+                date=date.today(),
+                payment_method="cash"
+            )
+            db_transaction.set_rollback(True)
+            
+        return Response({"success": True, "detail": "Test transaction created successfully!"})
     except Exception as e:
         return Response({
             "error": str(e),
