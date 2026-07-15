@@ -1630,3 +1630,37 @@ def superadmin_set_expiry_view(request, profile_id):
         return Response({"detail": "User not found."}, status=404)
 
 
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def test_error_view(request):
+    import traceback
+    try:
+        from accounts.models import Transaction, Category, Account
+        category = Category.objects.first()
+        account = Account.objects.first()
+        if not category or not account:
+            return Response({"detail": f"Diagnostic run: No category or account found. Categories: {Category.objects.count()}, Accounts: {Account.objects.count()}"})
+            
+        from django.db import transaction as db_transaction
+        from datetime import date
+        with db_transaction.atomic():
+            tx = Transaction.objects.create(
+                company=category.company,
+                transaction_type="income",
+                title="Diagnostic Test Transaction",
+                category=category,
+                account=account,
+                amount=100.00,
+                date=date.today(),
+                payment_method="cash"
+            )
+            db_transaction.set_rollback(True)
+            
+        return Response({"success": True, "detail": "Diagnostic test transaction created and rolled back successfully with no errors!"})
+    except Exception as e:
+        return Response({
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }, status=500)
+
+
