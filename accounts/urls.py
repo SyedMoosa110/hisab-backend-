@@ -34,5 +34,9 @@ urlpatterns = [
     path("import/sales/", views.import_sales_view),
     path("import/stock/", views.import_stock_view),
     
+    # Superadmin portal actions
+    path("superadmin/users/", views.superadmin_users_view),
+    path("superadmin/users/<int:profile_id>/toggle_block/", views.superadmin_toggle_block_view),
+    path("superadmin/users/<int:profile_id>/toggle_upgrade/", views.superadmin_toggle_upgrade_view),
 ]
 

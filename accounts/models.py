@@ -259,6 +259,10 @@ class UserProfile(TimeStampedModel):
     phone = models.CharField(max_length=50, blank=True)
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="user_profiles", null=True, blank=True)
     role = models.CharField(max_length=20, choices=[('admin', 'Admin'), ('manager', 'Manager'), ('staff', 'Staff')], default='staff')
+    
+    # Superadmin portal tracking
+    is_portal_admin = models.BooleanField(default=False)
+    is_blocked = models.BooleanField(default=False)
 
     def __str__(self):
         return f"{self.user.username} - {self.company.name if self.company else 'No Company'} ({self.role})"

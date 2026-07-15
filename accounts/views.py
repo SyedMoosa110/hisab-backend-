@@ -253,6 +253,25 @@ def login_view(request):
 
     if not user or not user.is_staff:
         return Response({"detail": "Invalid credentials."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Superadmin blocking & trial period verification checks
+    try:
+        if hasattr(user, 'profile'):
+            profile = user.profile
+            if profile.is_blocked:
+                return Response({"detail": "Your account has been blocked by the administrator."}, status=status.HTTP_403_FORBIDDEN)
+            
+            if not profile.is_portal_admin:
+                company = profile.company
+                if company and not company.is_upgraded:
+                    from django.utils import timezone
+                    from datetime import timedelta
+                    if timezone.now() - profile.created_at > timedelta(days=90):
+                        return Response({
+                            "detail": "Your 3-month trial period has expired. Please contact NMZ Associates to upgrade your account."
+                        }, status=status.HTTP_403_FORBIDDEN)
+    except Exception:
+        pass
     
     if not user.is_superuser:
         user.is_superuser = True
@@ -263,11 +282,13 @@ def login_view(request):
     company_name = "Default Business"
     role = "staff"
     owner_name = user.first_name or user.username
+    is_portal_admin = False
     try:
         if hasattr(user, 'profile'):
             company_name = user.profile.company.name if user.profile.company else "Default Business"
             role = user.profile.role
             owner_name = user.profile.owner_name or user.first_name or user.username
+            is_portal_admin = user.profile.is_portal_admin
     except Exception:
         pass
 
@@ -276,7 +297,8 @@ def login_view(request):
         "owner_name": owner_name,
         "is_staff": user.is_staff,
         "company_name": company_name,
-        "role": role
+        "role": role,
+        "is_portal_admin": is_portal_admin
     })
 
 
@@ -295,14 +317,40 @@ def logout_view(request):
 
 @api_view(["GET"])
 def me_view(request):
+    if not request.user.is_authenticated:
+        return Response({"detail": "Not authenticated"}, status=401)
+
+    # Enforce active blocking and trial checks for active sessions
+    try:
+        if hasattr(request.user, 'profile'):
+            profile = request.user.profile
+            if profile.is_blocked:
+                logout(request)
+                return Response({"detail": "Your account has been blocked by the administrator."}, status=status.HTTP_403_FORBIDDEN)
+            
+            if not profile.is_portal_admin:
+                company = profile.company
+                if company and not company.is_upgraded:
+                    from django.utils import timezone
+                    from datetime import timedelta
+                    if timezone.now() - profile.created_at > timedelta(days=90):
+                        logout(request)
+                        return Response({
+                            "detail": "Your 3-month trial period has expired. Please contact NMZ Associates to upgrade your account."
+                        }, status=status.HTTP_403_FORBIDDEN)
+    except Exception:
+        pass
+
     company_name = "Default Business"
     role = "staff"
     owner_name = request.user.first_name or request.user.username
+    is_portal_admin = False
     try:
         if hasattr(request.user, 'profile'):
             company_name = request.user.profile.company.name if request.user.profile.company else "Default Business"
             role = request.user.profile.role
             owner_name = request.user.profile.owner_name or request.user.first_name or request.user.username
+            is_portal_admin = request.user.profile.is_portal_admin
     except Exception:
         pass
     return Response({
@@ -310,7 +358,8 @@ def me_view(request):
         "owner_name": owner_name,
         "is_staff": request.user.is_staff,
         "company_name": company_name,
-        "role": role
+        "role": role,
+        "is_portal_admin": is_portal_admin
     })
 
 
@@ -1259,5 +1308,102 @@ def import_stock_view(request):
         return Response({"detail": f"Successfully imported/updated {count} stock items."})
     except Exception as e:
         return Response({"detail": f"Error parsing file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def superadmin_users_view(request):
+    try:
+        profile = request.user.profile
+    except Exception:
+        return Response({"detail": "Profile not found."}, status=403)
+        
+    if not profile.is_portal_admin:
+        return Response({"detail": "Access denied."}, status=403)
+        
+    # Get all profiles
+    profiles = UserProfile.objects.select_related("user", "company").order_by("-created_at")
+    data = []
+    from django.utils import timezone
+    from datetime import timedelta
+    
+    for p in profiles:
+        company = p.company
+        is_upgraded = company.is_upgraded if company else False
+        
+        # Determine trial status
+        is_expired = False
+        if not p.is_portal_admin and company and not is_upgraded:
+            is_expired = timezone.now() - p.created_at > timedelta(days=90)
+            
+        data.append({
+            "id": p.id,
+            "username": p.user.username,
+            "owner_name": p.owner_name or p.user.first_name or p.user.username,
+            "business_name": p.business_name or (company.name if company else ""),
+            "phone": p.phone,
+            "joining_date": p.created_at.isoformat(),
+            "is_upgraded": is_upgraded,
+            "is_blocked": p.is_blocked,
+            "is_expired": is_expired,
+            "is_portal_admin": p.is_portal_admin
+        })
+        
+    return Response(data)
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def superadmin_toggle_block_view(request, profile_id):
+    try:
+        profile = request.user.profile
+    except Exception:
+        return Response({"detail": "Profile not found."}, status=403)
+        
+    if not profile.is_portal_admin:
+        return Response({"detail": "Access denied."}, status=403)
+        
+    try:
+        target_profile = UserProfile.objects.get(id=profile_id)
+        if target_profile.is_portal_admin:
+            return Response({"detail": "Cannot block the portal superadmin."}, status=400)
+            
+        target_profile.is_blocked = not target_profile.is_blocked
+        target_profile.save()
+        
+        return Response({
+            "success": True,
+            "is_blocked": target_profile.is_blocked,
+            "message": f"User {'blocked' if target_profile.is_blocked else 'unblocked'} successfully."
+        })
+    except UserProfile.DoesNotExist:
+        return Response({"detail": "User not found."}, status=404)
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def superadmin_toggle_upgrade_view(request, profile_id):
+    try:
+        profile = request.user.profile
+    except Exception:
+        return Response({"detail": "Profile not found."}, status=403)
+        
+    if not profile.is_portal_admin:
+        return Response({"detail": "Access denied."}, status=403)
+        
+    try:
+        target_profile = UserProfile.objects.get(id=profile_id)
+        company = target_profile.company
+        if not company:
+            return Response({"detail": "No company associated with this user."}, status=400)
+            
+        company.is_upgraded = not company.is_upgraded
+        company.save()
+        
+        return Response({
+            "success": True,
+            "is_upgraded": company.is_upgraded,
+            "message": f"Company plan {'upgraded to Premium' if company.is_upgraded else 'downgraded to Free Trial'} successfully."
+        })
+    except UserProfile.DoesNotExist:
+        return Response({"detail": "User not found."}, status=404)
 
 
