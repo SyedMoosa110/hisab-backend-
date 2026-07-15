@@ -40,11 +40,18 @@ class TransactionSerializer(serializers.ModelSerializer):
     def validate_attachment(self, attachment):
         if not attachment:
             return attachment
-        extension = Path(attachment.name).suffix.lower()
-        if extension not in self.ALLOWED_ATTACHMENT_EXTENSIONS:
-            raise serializers.ValidationError('Only PDF and image receipts are allowed.')
-        if attachment.size > self.MAX_ATTACHMENT_SIZE:
-            raise serializers.ValidationError('Attachment must be 5 MB or smaller.')
+        if isinstance(attachment, str) and attachment.startswith('data:'):
+            try:
+                header, data = attachment.split(';base64,', 1)
+                mime_type = header.split(':', 1)[1]
+                allowed_mimes = {'image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/pdf'}
+                if mime_type not in allowed_mimes:
+                    raise serializers.ValidationError('Only PDF and image receipts are allowed.')
+                size_bytes = len(data) * 3 // 4
+                if size_bytes > self.MAX_ATTACHMENT_SIZE:
+                    raise serializers.ValidationError('Attachment must be 5 MB or smaller.')
+            except ValueError:
+                raise serializers.ValidationError('Invalid base64 attachment format.')
         return attachment
 
     class Meta:

@@ -97,7 +97,7 @@ class Transaction(TimeStampedModel):
     payment_method = models.CharField(max_length=20, choices=PAYMENT_METHODS)
     reference_number = models.CharField(max_length=120, blank=True)
     notes = models.TextField(blank=True)
-    attachment = models.FileField(upload_to="receipts/%Y/%m/", blank=True, null=True)
+    attachment = models.TextField(blank=True, null=True)
 
     class Meta:
         ordering = ["-date", "-created_at"]

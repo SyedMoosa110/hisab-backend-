@@ -39,6 +39,5 @@ urlpatterns = [
     path("superadmin/users/<int:profile_id>/toggle_block/", views.superadmin_toggle_block_view),
     path("superadmin/users/<int:profile_id>/toggle_upgrade/", views.superadmin_toggle_upgrade_view),
     path("superadmin/users/<int:profile_id>/set_expiry/", views.superadmin_set_expiry_view),
-    path("test-error/", views.test_error_view),
 ]
 
