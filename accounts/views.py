@@ -1410,6 +1410,7 @@ def superadmin_users_view(request):
     return Response(data)
 
 @api_view(["POST"])
+@authentication_classes([CsrfExemptSessionAuthentication])
 @permission_classes([IsAuthenticated])
 def superadmin_toggle_block_view(request, profile_id):
     try:
@@ -1437,6 +1438,7 @@ def superadmin_toggle_block_view(request, profile_id):
         return Response({"detail": "User not found."}, status=404)
 
 @api_view(["POST"])
+@authentication_classes([CsrfExemptSessionAuthentication])
 @permission_classes([IsAuthenticated])
 def superadmin_toggle_upgrade_view(request, profile_id):
     try:
@@ -1466,6 +1468,7 @@ def superadmin_toggle_upgrade_view(request, profile_id):
 
 
 @api_view(["POST"])
+@authentication_classes([CsrfExemptSessionAuthentication])
 @permission_classes([IsAuthenticated])
 def superadmin_set_expiry_view(request, profile_id):
     try:
