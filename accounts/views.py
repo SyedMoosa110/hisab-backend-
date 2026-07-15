@@ -1633,30 +1633,22 @@ def superadmin_set_expiry_view(request, profile_id):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def test_error_view(request):
+    from accounts.models import Company, UserProfile, Category, Account, Party
     import traceback
     try:
-        from accounts.models import Transaction, Category, Account
-        category = Category.objects.first()
-        account = Account.objects.first()
-        if not category or not account:
-            return Response({"detail": f"Diagnostic run: No category or account found. Categories: {Category.objects.count()}, Accounts: {Account.objects.count()}"})
-            
-        from django.db import transaction as db_transaction
-        from datetime import date
-        with db_transaction.atomic():
-            tx = Transaction.objects.create(
-                company=category.company,
-                transaction_type="income",
-                title="Diagnostic Test Transaction",
-                category=category,
-                account=account,
-                amount=100.00,
-                date=date.today(),
-                payment_method="cash"
-            )
-            db_transaction.set_rollback(True)
-            
-        return Response({"success": True, "detail": "Diagnostic test transaction created and rolled back successfully with no errors!"})
+        companies = list(Company.objects.all().values("id", "name"))
+        profiles = list(UserProfile.objects.all().values("id", "user__username", "company_id"))
+        categories = list(Category.objects.all().values("id", "name", "company_id"))
+        accounts = list(Account.objects.all().values("id", "name", "company_id"))
+        parties = list(Party.objects.all().values("id", "name", "company_id"))
+        
+        return Response({
+            "companies": companies,
+            "profiles": profiles,
+            "categories": categories,
+            "accounts": accounts,
+            "parties": parties,
+        })
     except Exception as e:
         return Response({
             "error": str(e),
