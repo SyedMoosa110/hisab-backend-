@@ -1378,6 +1378,12 @@ def superadmin_users_view(request):
     from datetime import timedelta
     
     for p in profiles:
+        # Enforce that ONLY 'admin' and 'moosa' accounts are portal admins
+        should_be_admin = p.user.username.lower() in ['admin', 'moosa']
+        if p.is_portal_admin != should_be_admin:
+            p.is_portal_admin = should_be_admin
+            p.save()
+
         company = p.company
         is_upgraded = company.is_upgraded if company else False
         
