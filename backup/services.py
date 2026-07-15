@@ -145,36 +145,20 @@ class BackupService:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
     def create_database_snapshot(self, temp_dir):
-        db_settings = settings.DATABASES['default']
-        engine = db_settings['ENGINE']
+        # We always snapshot as JSON using Django's dumpdata. 
+        # This is the only way to support safe multi-tenant company-filtered restores 
+        # on both SQLite and PostgreSQL.
         timestamp = int(time.time())
-        snapshot_path = os.path.join(temp_dir, f'snapshot_{timestamp}.db')
+        snapshot_path = os.path.join(temp_dir, f'snapshot_{timestamp}.json')
 
-        if 'sqlite' in engine:
-            db_name = db_settings['NAME']
-            # Safe copy using python sqlite3 backup API
-            import sqlite3
-            def progress(status, remaining, total):
-                pass
-            con = sqlite3.connect(db_name)
-            bck = sqlite3.connect(snapshot_path)
-            with bck:
-                con.backup(bck, pages=1, progress=progress)
-            bck.close()
-            con.close()
-        elif 'postgresql' in engine:
-            from django.core.management import call_command
-            snapshot_path = snapshot_path.replace('.db', '.json')
-            
-            with open(snapshot_path, 'w', encoding='utf-8') as f:
-                call_command(
-                    'dumpdata', 
-                    format='json', 
-                    exclude=['contenttypes', 'auth.Permission'],
-                    stdout=f
-                )
-        else:
-            raise Exception(f"Unsupported database engine for native backup: {engine}")
+        from django.core.management import call_command
+        with open(snapshot_path, 'w', encoding='utf-8') as f:
+            call_command(
+                'dumpdata', 
+                format='json', 
+                exclude=['contenttypes', 'auth.Permission'],
+                stdout=f
+            )
         return snapshot_path
 
     def compress_file(self, filepath):
@@ -361,22 +345,21 @@ class BackupService:
                 meta_json = json.load(mf)
                 
             t = log_stage("Metadata verified", t)
-            required_keys = ['sha256_checksum', 'version', 'encryption', 'timestamp']
             
-            # Wait, our metadata generated has "backup_version", not "version" - let's make sure both are supported
-            # to prevent validation crashes.
             version_val = meta_json.get('version') or meta_json.get('backup_version')
-            if not version_val:
-                raise ValueError("Missing required metadata field: version")
-            if 'sha256_checksum' not in meta_json or 'encryption' not in meta_json or 'backup_timestamp' not in meta_json:
-                raise ValueError("Missing required metadata fields.")
+            timestamp_val = meta_json.get('timestamp') or meta_json.get('backup_timestamp')
+            sha_val = meta_json.get('sha256_checksum')
+            enc_val = meta_json.get('encryption')
+
+            if not version_val or not timestamp_val or not sha_val or not enc_val:
+                raise ValueError("Missing required metadata fields (version, timestamp, sha256_checksum, or encryption).")
             
-            if meta_json.get('encryption') != 'AES-256-GCM':
+            if enc_val != 'AES-256-GCM':
                 raise ValueError("Unsupported encryption algorithm in metadata.")
                 
             t = log_stage("SHA verified", t)
             checksum = self.generate_sha256(encrypted_path)
-            if checksum != meta_json.get('sha256_checksum'):
+            if checksum != sha_val:
                 raise ValueError("Backup integrity verification failed. Checksum mismatch.")
                 
             t = log_stage("Decrypting", t)
