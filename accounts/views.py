@@ -286,8 +286,8 @@ def login_view(request):
     try:
         if hasattr(user, 'profile'):
             profile = user.profile
-            # Automatically designate the default 'admin' and 'moosa' accounts as portal admins
-            if user.username in ['admin', 'moosa'] and not profile.is_portal_admin:
+            # Automatically designate the default 'admin' and 'moosa' accounts as portal admins (case-insensitive)
+            if user.username.lower() in ['admin', 'moosa'] and not profile.is_portal_admin:
                 profile.is_portal_admin = True
                 profile.save()
                 
@@ -353,10 +353,16 @@ def me_view(request):
     is_portal_admin = False
     try:
         if hasattr(request.user, 'profile'):
-            company_name = request.user.profile.company.name if request.user.profile.company else "Default Business"
-            role = request.user.profile.role
-            owner_name = request.user.profile.owner_name or request.user.first_name or request.user.username
-            is_portal_admin = request.user.profile.is_portal_admin
+            profile = request.user.profile
+            # Automatically designate 'admin' and 'moosa' accounts as portal admins (case-insensitive)
+            if request.user.username.lower() in ['admin', 'moosa'] and not profile.is_portal_admin:
+                profile.is_portal_admin = True
+                profile.save()
+                
+            company_name = profile.company.name if profile.company else "Default Business"
+            role = profile.role
+            owner_name = profile.owner_name or request.user.first_name or request.user.username
+            is_portal_admin = profile.is_portal_admin
     except Exception:
         pass
     return Response({
