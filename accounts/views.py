@@ -256,8 +256,13 @@ def login_view(request):
 
     # Superadmin blocking & trial period verification checks
     try:
+        profile = None
         if hasattr(user, 'profile'):
             profile = user.profile
+        else:
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+
+        if profile:
             if profile.is_blocked:
                 return Response({"detail": "Your account has been blocked by the administrator."}, status=status.HTTP_403_FORBIDDEN)
             
@@ -284,8 +289,13 @@ def login_view(request):
     owner_name = user.first_name or user.username
     is_portal_admin = False
     try:
+        profile = None
         if hasattr(user, 'profile'):
             profile = user.profile
+        else:
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+
+        if profile:
             # Automatically designate the default 'admin' and 'moosa' accounts as portal admins (case-insensitive)
             if user.username.lower() in ['admin', 'moosa'] and not profile.is_portal_admin:
                 profile.is_portal_admin = True
@@ -328,8 +338,13 @@ def me_view(request):
 
     # Enforce active blocking and trial checks for active sessions
     try:
+        profile = None
         if hasattr(request.user, 'profile'):
             profile = request.user.profile
+        else:
+            profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
+        if profile:
             if profile.is_blocked:
                 logout(request)
                 return Response({"detail": "Your account has been blocked by the administrator."}, status=status.HTTP_403_FORBIDDEN)
@@ -352,8 +367,13 @@ def me_view(request):
     owner_name = request.user.first_name or request.user.username
     is_portal_admin = False
     try:
+        profile = None
         if hasattr(request.user, 'profile'):
             profile = request.user.profile
+        else:
+            profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
+        if profile:
             # Automatically designate 'admin' and 'moosa' accounts as portal admins (case-insensitive)
             if request.user.username.lower() in ['admin', 'moosa'] and not profile.is_portal_admin:
                 profile.is_portal_admin = True
