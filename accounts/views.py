@@ -1636,6 +1636,7 @@ def test_error_view(request):
     import traceback
     try:
         from accounts.models import Transaction, Category, Account, Party
+        from accounts.serializers import TransactionSerializer
         from datetime import date
         
         category = Category.objects.get(id=9)
@@ -1644,10 +1645,11 @@ def test_error_view(request):
         
         from django.db import transaction as db_transaction
         with db_transaction.atomic():
-            tx = Transaction.objects.create(
+            # Test 1: With Party
+            tx_with_party = Transaction.objects.create(
                 company=category.company,
                 transaction_type="income",
-                title="Mock Transaction Save test",
+                title="Mock Transaction Save test with Party",
                 category=category,
                 account=account,
                 party=party,
@@ -1655,9 +1657,32 @@ def test_error_view(request):
                 date=date.today(),
                 payment_method="cash"
             )
+            serializer_with_party = TransactionSerializer(tx_with_party)
+            data_with_party = serializer_with_party.data
+
+            # Test 2: Without Party
+            tx_no_party = Transaction.objects.create(
+                company=category.company,
+                transaction_type="income",
+                title="Mock Transaction Save test no Party",
+                category=category,
+                account=account,
+                party=None,
+                amount=100.00,
+                date=date.today(),
+                payment_method="cash"
+            )
+            serializer_no_party = TransactionSerializer(tx_no_party)
+            data_no_party = serializer_no_party.data
+            
             db_transaction.set_rollback(True)
             
-        return Response({"success": True, "detail": "Test transaction created successfully!"})
+        return Response({
+            "success": True,
+            "detail": "Test transactions serialized successfully!",
+            "data_with_party": data_with_party,
+            "data_no_party": data_no_party
+        })
     except Exception as e:
         return Response({
             "error": str(e),
