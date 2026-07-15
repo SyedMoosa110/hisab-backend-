@@ -286,8 +286,8 @@ def login_view(request):
     try:
         if hasattr(user, 'profile'):
             profile = user.profile
-            # Automatically designate the default 'admin' account as a portal admin
-            if user.username == 'admin' and not profile.is_portal_admin:
+            # Automatically designate the default 'admin' and 'moosa' accounts as portal admins
+            if user.username in ['admin', 'moosa'] and not profile.is_portal_admin:
                 profile.is_portal_admin = True
                 profile.save()
                 
