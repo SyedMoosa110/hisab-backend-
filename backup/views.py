@@ -320,7 +320,6 @@ def trigger_migrate(request):
     if not request.user.is_superuser:
         return Response({'success': False, 'error': 'Only administrators can run database migrations.'}, status=403)
     try:
-        call_command('makemigrations', 'backup', interactive=False)
         call_command('migrate', interactive=False)
         return Response({
             'success': True,
