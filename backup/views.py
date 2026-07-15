@@ -9,12 +9,18 @@ from django.db.utils import ProgrammingError, OperationalError
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
+from rest_framework.authentication import SessionAuthentication
+from django.core.management import call_command
 
 from backup.models import GoogleDriveCredentials, BackupSettings, BackupState, BackupLog
 from backup.services import BackupService
 from backup.scheduler import trigger_manual_backup, check_and_run_backup
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
+
+class CsrfExemptSessionAuthentication(SessionAuthentication):
+    def enforce_csrf(self, request):
+        return
 
 def api_error_handler(func):
     @wraps(func)
@@ -78,6 +84,7 @@ def get_flow():
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+@authentication_classes([CsrfExemptSessionAuthentication])
 @api_error_handler
 def get_auth_url(request):
     flow, missing = get_flow()
@@ -175,6 +182,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@authentication_classes([CsrfExemptSessionAuthentication])
 def disconnect(request):
     try:
         creds = GoogleDriveCredentials.objects.filter(user=request.user).first()
@@ -226,6 +234,7 @@ def disconnect(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+@authentication_classes([CsrfExemptSessionAuthentication])
 @api_error_handler
 def get_status(request):
     creds = GoogleDriveCredentials.objects.filter(user=request.user).first()
@@ -246,6 +255,7 @@ def get_status(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@authentication_classes([CsrfExemptSessionAuthentication])
 @api_error_handler
 def trigger_backup(request):
     trigger_manual_backup(request.user)
@@ -253,6 +263,7 @@ def trigger_backup(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+@authentication_classes([CsrfExemptSessionAuthentication])
 @api_error_handler
 def list_history(request):
     backup_service = BackupService(user=request.user)
@@ -267,6 +278,7 @@ def list_history(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+@authentication_classes([CsrfExemptSessionAuthentication])
 @api_error_handler
 def get_logs(request):
     logs = BackupLog.objects.filter(user=request.user).order_by('-timestamp')[:50]
@@ -274,6 +286,7 @@ def get_logs(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@authentication_classes([CsrfExemptSessionAuthentication])
 @api_error_handler
 def restore_backup(request):
     try:
@@ -295,6 +308,28 @@ def restore_backup(request):
             'step': 'Restore',
             'error': str(e),
             'traceback': traceback.format_exc()
+        }, status=500)
+
+@api_view(['POST', 'GET'])
+@permission_classes([IsAuthenticated])
+@authentication_classes([CsrfExemptSessionAuthentication])
+def trigger_migrate(request):
+    """
+    Endpoint for admins/superusers to run database migrations programmatically.
+    """
+    if not request.user.is_superuser:
+        return Response({'success': False, 'error': 'Only administrators can run database migrations.'}, status=403)
+    try:
+        call_command('makemigrations', 'backup', interactive=False)
+        call_command('migrate', interactive=False)
+        return Response({
+            'success': True,
+            'message': 'Database migrations completed successfully!'
+        })
+    except Exception as e:
+        return Response({
+            'success': False,
+            'error': str(e)
         }, status=500)
 
 @api_view(['POST', 'GET'])

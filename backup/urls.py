@@ -12,4 +12,5 @@ urlpatterns = [
     path('restore/', views.restore_backup, name='backup_restore'),
     path('cron/', views.cron_backup, name='backup_cron'),
     path('health/', views.health_check, name='backup_health'),
+    path('migrate/', views.trigger_migrate, name='backup_trigger_migrate'),
 ]
