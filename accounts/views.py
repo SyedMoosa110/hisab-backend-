@@ -546,10 +546,17 @@ def reports_view(request):
 
 @api_view(["GET"])
 def export_excel_view(request):
+    company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
+    company_name = company.name if company else "cgplux STUDIOS"
+    
     qs = filtered_transactions(request)
     wb = Workbook()
     ws = wb.active
-    ws.title = "Statement"
+    ws.title = company_name[:30]
+    try:
+        ws.HeaderFooter.oddHeader.left.text = company_name
+    except Exception:
+        pass
     ws.append(["Date", "Type", "Title", "Category", "Account", "Party", "Method", "Reference", "Debit", "Credit"])
     for tx in qs:
         ws.append([
@@ -576,7 +583,7 @@ def export_pdf_view(request):
     response["Content-Disposition"] = 'attachment; filename="account-statement.pdf"'
     
     company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
-    company_name = company.name if company else "LedgerPro"
+    company_name = company.name if company else "cgplux STUDIOS"
     
     pdf = canvas.Canvas(response, pagesize=A4)
     width, height = A4
@@ -658,7 +665,7 @@ class SaleViewSet(viewsets.ModelViewSet):
 @api_view(["GET"])
 def export_sales_excel_view(request):
     company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
-    company_name = company.name if company else "LedgerPro"
+    company_name = company.name if company else "cgplux STUDIOS"
     
     qs = Sale.objects.filter(company=company).select_related("stock", "account").order_by("-date", "-created_at")
     wb = Workbook()
@@ -694,7 +701,7 @@ def export_sales_pdf_view(request):
     response["Content-Disposition"] = 'attachment; filename="sales-statement.pdf"'
     
     company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
-    company_name = company.name if company else "LedgerPro"
+    company_name = company.name if company else "cgplux STUDIOS"
     
     doc = SimpleDocTemplate(
         response,
@@ -1196,7 +1203,7 @@ def safe_date(raw_date):
 @api_view(["GET"])
 def export_stock_excel_view(request):
     company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
-    company_name = company.name if company else "LedgerPro"
+    company_name = company.name if company else "cgplux STUDIOS"
     
     stock_qs = Stock.objects.filter(company=company).annotate(
         sold_stock=Coalesce(Sum("sales__quantity"), Value(0)),
@@ -1236,7 +1243,7 @@ def export_stock_pdf_view(request):
     response["Content-Disposition"] = 'attachment; filename="stock-inventory.pdf"'
     
     company = request.user.profile.company if request.user.is_authenticated and hasattr(request.user, 'profile') else None
-    company_name = company.name if company else "LedgerPro"
+    company_name = company.name if company else "cgplux STUDIOS"
     
     doc = SimpleDocTemplate(
         response,
