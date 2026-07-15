@@ -20,7 +20,7 @@ from reportlab.lib import colors
 from rest_framework import status, viewsets
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import AllowAny, IsAdminUser
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
 from .models import Account, Category, Company, DuePayment, Note, Party, Transaction, Stock, Sale, UserProfile
